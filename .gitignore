@@ -12,3 +12,4 @@ wandb/
 
 .vscode/settings.json
 .vscode/launch.json
+.vscode

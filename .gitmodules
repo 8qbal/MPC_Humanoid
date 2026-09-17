@@ -1,0 +1,9 @@
+[submodule "references/ros2_jazzy_autorace_simulation"]
+	path = references/ros2_jazzy_autorace_simulation
+	url = https://github.com/TKU-AIRO-Lab/ros2_jazzy_autorace_simulation.git
+[submodule "references/Robinion_Parallel_IsaacLab"]
+	path = references/Robinion_Parallel_IsaacLab
+	url = https://github.com/choirulprayoga/Robinion_Parallel_IsaacLab.git
+[submodule "references/Robinion_InverseKinematic"]
+	path = references/Robinion_InverseKinematic
+	url = https://github.com/dimasrizky08/Robinion_InverseKinematic.git

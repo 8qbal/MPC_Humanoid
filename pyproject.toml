@@ -20,6 +20,7 @@ package = false
 
 [tool.uv.sources]
 "MPC_Humanoid" = { workspace = true }
+"acados_template" = { path = "/home/tkuai/acados/interfaces/acados_template", editable = true }
 
 [tool.uv.workspace]
 members = ["source/MPC_Humanoid"]

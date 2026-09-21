@@ -142,7 +142,7 @@ Rules when working on this pipeline:
 ## When editing robot/task config
 
 - `robots/robonionv2.py` deliberately keeps the actuator model (stiffness/damping/
-  armature, derived from the Dynamixel MX-106/AX-12A datasheets) separate from the
+  armature, derived from the Dynamixel XH540-W270/AX-12A datasheets) separate from the
   USD asset's raw inertial/collision data — don't fold one into the other.
 - The 4 parallelogram-passive joints (`*_knee_pitch_joint`, `*_back_thigh_pitch_joint`,
   `*_front_shin_pitch_joint`, `*_back_shin_pitch_joint`) are unmotored by design

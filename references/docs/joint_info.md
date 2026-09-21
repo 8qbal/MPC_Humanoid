@@ -12,7 +12,7 @@ Reference sheet for building the Robinion `ArticulationCfg` in `source/MPC_Human
 | `references/Robinion_InverseKinematic/robinion_description/` | Second copy of the description with a mirrored `leg.xacro` (different axis signs) and `ik_controller_fullbody.py`. The IK script is the only document that states the **parallelogram coupling** between joints (see *Leg mechanism*). |
 
 Notes:
-- Actuators are **Dynamixel MX-106** and **Dynamixel AX-12**. The effort/velocity limits in the URDF (4.1 / 9.9 / 10.6 / 19.8 N·m) are **not** MX-106 datasheet values and must be replaced.
+- Actuators are **Dynamixel XH540-W270** (body/legs/arms) and **Dynamixel AX-12** (head). The URDF velocity limits 4.82 / 4.08 rad/s (46 / 39 rpm) and the 9.9 N·m effort match the XH540-W270 datasheet (14.8 V / 12 V no-load speed, 12 V stall torque); the 4.1 / 10.6 / 19.8 N·m efforts and the 3.14 rad/s limit do not and must be replaced.
 - The knee joint (`*_knee_pitch_joint`) has **no actuator** (confirmed by the user).
 - **Two separate Isaac Sim installations exist on the dev machine, with two different converter versions** — see *USD verification* for why this matters before you re-run the GUI importer.
 
@@ -251,7 +251,7 @@ Observation: `hip_roll_pitch_link` and `ankle_roll_pitch_link` share identical m
 3. Thigh/shin bar inertia tensors are copy-pasted (identical for 0.06 kg and 0.079 kg parts).
 4. Loop-closure joints for both parallelograms are absent (URDF limitation) — the passive joints are unconstrained in any simulator that loads the file as-is. *Added in `assets/robonionv2.usd`.*
 5. Shoulder mount y-offsets are not symmetric about the pelvis.
-6. Effort/velocity limits are not MX-106 values (see below). Velocity 4.82 rad/s ≈ 46 rpm, 4.08 ≈ 39 rpm, 3.14 ≈ 30 rpm — these match other Dynamixel X-series models, not the MX-106.
+6. Effort/velocity limits are only partly XH540-W270 values (see below). Velocity 4.82 rad/s ≈ 46 rpm (14.8 V) and 4.08 ≈ 39 rpm (12 V) match the XH540-W270 no-load speed; 3.14 ≈ 30 rpm matches the XM540-W270 instead. Effort 9.9 N·m is the XH540-W270 12 V stall torque; 10.6 N·m is the XM540-W270 value, 4.1 and 19.8 are unexplained.
 7. IK script link length (0.18 m) disagrees with URDF bar length (0.20 m).
 8. Joint `<dynamics>` is a uniform placeholder (damping 0.1, friction 0) on every joint.
 9. Naming: `l_gripper_fixed_joint` vs `right_gripper_fixed_joint`; link `right_foot_roll_link` vs the mesh name `right_foot`.
@@ -331,25 +331,26 @@ Everything else matches the URDF exactly: 35 links, 34 joints (29 revolute + 5 f
 - No physics material is bound anywhere → foot friction is the PhysX default until an `ArticulationCfg`/scene material sets it.
 - Joint drives have no stiffness authored; the `ArticulationCfg` actuator models override these.
 
-## Actuator: Dynamixel MX-106 (datasheet values — verify against the ROBOTIS e-Manual)
+## Actuator: Dynamixel XH540-W270 (datasheet values — verify against the ROBOTIS e-Manual)
 
 | Parameter | Value |
 |---|---|
-| Gear ratio | 225 : 1 |
-| Stall torque | 8.0 N·m @ 11.1 V (4.8 A) · 8.4 N·m @ 12 V (5.2 A) · 10.0 N·m @ 14.8 V (6.3 A) |
-| No-load speed | 41 rpm (4.29 rad/s) @ 11.1 V · 45 rpm (4.71 rad/s) @ 12 V · 55 rpm (5.76 rad/s) @ 14.8 V |
+| Gear ratio | 272.5 : 1 |
+| Stall torque | 9.2 N·m @ 11.1 V (4.5 A) · 9.9 N·m @ 12 V (4.9 A) · 11.7 N·m @ 14.8 V (5.9 A) |
+| No-load speed | 36 rpm (3.77 rad/s) @ 11.1 V · 39 rpm (4.08 rad/s) @ 12 V · 46 rpm (4.82 rad/s) @ 14.8 V |
+| Operating voltage | 10.0–14.8 V (recommended 12.0 V) |
 | Position resolution | 4096 pulses/rev (0.088°) |
-| Weight | 153 g (MX-106T) / 165 g (MX-106R) |
-| Dimensions | 40.2 × 65.1 × 46 mm |
-| Control (Protocol 2.0, position mode) | PID on position error, output = PWM (100 % = 885). Default P gain 850 (K_P = 850/128 ≈ 6.64), I = 0, D = 0 |
+| Weight | 165 g |
+| Dimensions | 33.5 × 58.5 × 44 mm |
+| Control (Protocol 2.0, position mode) | PID on position error, output = PWM (100 % = 885). Default P gain 800 (K_P = 800/128 = 6.25), I = 0, D = 0. Current limit 2047, velocity limit 167 × 0.229 rpm ≈ 38 rpm |
 | Rotor inertia, gear friction, backlash | not published — must be identified |
 
 First-principles conversion to an Isaac Lab PD actuator (12 V, default P gain, no I/D):
-- PWM saturates (100 %) at a position error of 885 / (6.64 × 651.9 pulses/rad) ≈ **0.204 rad (11.7°)**.
-- Effective stiffness below saturation ≈ stall torque / 0.204 rad ≈ **41 N·m/rad** (8.4 N·m @ 12 V).
-- Back-EMF speed droop gives an effective damping ≈ stall torque / no-load speed ≈ 8.4 / 4.71 ≈ **1.8 N·m·s/rad**.
+- PWM saturates (100 %) at a position error of 885 / (6.25 × 651.9 pulses/rad) ≈ **0.217 rad (12.4°)**.
+- Effective stiffness below saturation ≈ stall torque / 0.217 rad ≈ **46 N·m/rad** (9.9 N·m @ 12 V).
+- Back-EMF speed droop gives an effective damping ≈ stall torque / no-load speed ≈ 9.9 / 4.08 ≈ **2.4 N·m·s/rad**.
 - Torque–speed envelope is linear from stall to no-load: Isaac Lab's `DCMotorCfg` (saturation_effort = stall torque, velocity_limit = no-load speed) reproduces this; `ImplicitActuatorCfg` with the stiffness/damping above is the simpler approximation.
-- Reflected rotor inertia (armature) for a 225:1 coreless motor is expected in the 1e-3 to 5e-3 kg·m² range; treat as a tunable to be identified, not a datasheet value.
+- Reflected rotor inertia (armature) for a 272.5:1 coreless motor is expected in the 1e-3 to 5e-3 kg·m² range; treat as a tunable to be identified, not a datasheet value.
 
 These numbers change with supply voltage and with the P/I/D gains actually programmed into the servos — both must be read from the real robot.
 

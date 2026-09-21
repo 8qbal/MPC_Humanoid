@@ -10,6 +10,9 @@ outputs/
 videos/
 wandb/
 
+docs/**/*.md
+
 .vscode/settings.json
 .vscode/launch.json
 .vscode
+

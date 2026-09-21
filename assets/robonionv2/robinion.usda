@@ -1,0 +1,427 @@
+#usda 1.0
+(
+    "newly converted"
+    customLayerData = {
+        dictionary cameraSettings = {
+            dictionary Front = {
+                double3 position = (5, 0, 0)
+                double radius = 5
+            }
+            dictionary Perspective = {
+                double3 position = (0.307281029429101, 0.2361512094986671, 0.7843019777954489)
+                double3 target = (0.28045696885106713, 0.21572160310076607, 0.7531926723408988)
+            }
+            dictionary Right = {
+                double3 position = (0, -5, 0)
+                double radius = 5
+            }
+            dictionary Top = {
+                double3 position = (0, 0, 5)
+                double radius = 5
+            }
+            string boundCamera = "/OmniverseKit_Persp"
+        }
+        string creator = "URDF USD Converter v0.3.2"
+        dictionary omni_layer = {
+            string authoring_layer = "./robinion.usda"
+        }
+        dictionary renderSettings = {
+        }
+    }
+    defaultPrim = "robinion"
+    kilogramsPerUnit = 1
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+
+def Xform "robinion" (
+    prepend apiSchemas = ["GeomModelAPI"]
+    assetInfo = {
+        string name = "robinion"
+    }
+    kind = "component"
+    prepend payload = @./Payload/Contents.usda@
+)
+{
+    float3[] extentsHint = [(-0.06450001, -0.49148163, -0.55375), (0.115875, 0.49148163, 0.37455103), (3.4028235e38, 3.4028235e38, 3.4028235e38), (-3.4028235e38, -3.4028235e38, -3.4028235e38), (3.4028235e38, 3.4028235e38, 3.4028235e38), (-3.4028235e38, -3.4028235e38, -3.4028235e38), (-0.0645, -0.47701702, -0.55375), (0.115875, 0.47701702, 0.374801)]
+    quatf xformOp:orient = (1, 0, 0, 0)
+    float3 xformOp:scale = (1, 1, 1)
+    double3 xformOp:translate = (0, 0, 0.6092599858574514)
+    uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+
+    over "Geometry"
+    {
+        over "base_link"
+        {
+            over "lower_body_link" (
+                prepend apiSchemas = ["PhysxArticulationAPI"]
+            )
+            {
+                bool newton:selfCollisionEnabled = 0
+                custom bool physxArticulation:enabledSelfCollisions = 0
+
+                over "right_hip_yaw_link"
+                {
+                    over "right_hip_roll_pitch_link"
+                    {
+                        over "right_front_thigh_pitch_link"
+                        {
+                            over "right_knee_pitch_link"
+                            {
+                                over "right_front_shin_pitch_link"
+                                {
+                                    over "right_ankle_roll_pitch_link"
+                                    {
+                                        over "right_foot_roll_link"
+                                        {
+                                            float3 physics:diagonalInertia = (0.00008079, 0.0005547, 0.0005773)
+                                            quatf physics:principalAxes = (1, 0, 0, 0)
+                                        }
+                                    }
+                                }
+
+                                over "right_back_shin_pitch_link"
+                                {
+                                }
+                            }
+                        }
+
+                        over "right_back_thigh_pitch_link"
+                        {
+                        }
+                    }
+                }
+
+                over "left_hip_yaw_link"
+                {
+                    over "left_hip_roll_pitch_link"
+                    {
+                        over "left_front_thigh_pitch_link"
+                        {
+                            over "left_knee_pitch_link"
+                            {
+                                over "left_back_shin_pitch_link"
+                                {
+                                    token visibility = "inherited"
+                                    quatf xformOp:orient = (1, 0, 0, 0)
+                                    float3 xformOp:scale = (1, 1, 1)
+                                    double3 xformOp:translate = (-0.04125, 0, -0.04775)
+                                    uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+                                }
+
+                                over "left_front_shin_pitch_link"
+                                {
+                                    over "left_ankle_roll_pitch_link"
+                                    {
+                                        over "left_foot_roll_link"
+                                        {
+                                            float3 physics:diagonalInertia = (0.00008079, 0.0005547, 0.0005773)
+                                            quatf physics:principalAxes = (1, 0, 0, 0)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        over "left_back_thigh_pitch_link"
+                        {
+                            float physics:mass = 0.06
+                        }
+                    }
+                }
+
+                over "upper_body_link"
+                {
+                    over "head_yaw_link"
+                    {
+                        over "head_pitch_link"
+                        {
+                        }
+                    }
+
+                    over "right_shoulder_pitch_link"
+                    {
+                        over "right_shoulder_roll_link"
+                        {
+                            over "right_elbow_yaw_link"
+                            {
+                                over "right_elbow_pitch_link"
+                                {
+                                    over "right_gripper"
+                                    {
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    over "left_shoulder_pitch_link"
+                    {
+                        over "left_shoulder_roll_link"
+                        {
+                            over "left_elbow_yaw_link"
+                            {
+                                over "left_elbow_pitch_link"
+                                {
+                                    over "left_gripper"
+                                    {
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    over "Physics"
+    {
+        def PhysicsRevoluteJoint "right_back_thigh_loop_joint"
+        {
+            uniform token physics:axis = "Y"
+            rel physics:body0 = </robinion/Geometry/base_link/lower_body_link/right_hip_yaw_link/right_hip_roll_pitch_link/right_back_thigh_pitch_link>
+            rel physics:body1 = </robinion/Geometry/base_link/lower_body_link/right_hip_yaw_link/right_hip_roll_pitch_link/right_front_thigh_pitch_link/right_knee_pitch_link>
+            float physics:breakForce = 3.4028235e38
+            float physics:breakTorque = 3.4028235e38
+            uniform bool physics:excludeFromArticulation = 1
+            point3f physics:localPos0 = (0, 0, -0.2)
+            point3f physics:localPos1 = (-0.04125, 0, 0)
+            quatf physics:localRot0 = (1, 0, 0, 0)
+            quatf physics:localRot1 = (1, 0, 0, 0)
+        }
+
+        def PhysicsRevoluteJoint "right_back_shin_loop_joint"
+        {
+            uniform token physics:axis = "Y"
+            rel physics:body0 = </robinion/Geometry/base_link/lower_body_link/right_hip_yaw_link/right_hip_roll_pitch_link/right_front_thigh_pitch_link/right_knee_pitch_link/right_back_shin_pitch_link>
+            rel physics:body1 = </robinion/Geometry/base_link/lower_body_link/right_hip_yaw_link/right_hip_roll_pitch_link/right_front_thigh_pitch_link/right_knee_pitch_link/right_front_shin_pitch_link/right_ankle_roll_pitch_link>
+            float physics:breakForce = 3.4028235e38
+            float physics:breakTorque = 3.4028235e38
+            uniform bool physics:excludeFromArticulation = 1
+            point3f physics:localPos0 = (0, 0, -0.2)
+            point3f physics:localPos1 = (-0.04125, 0, 0)
+            quatf physics:localRot0 = (1, 0, 0, 0)
+            quatf physics:localRot1 = (1, 0, 0, 0)
+        }
+
+        def PhysicsRevoluteJoint "left_back_thigh_loop_joint"
+        {
+            uniform token physics:axis = "Y"
+            rel physics:body0 = </robinion/Geometry/base_link/lower_body_link/left_hip_yaw_link/left_hip_roll_pitch_link/left_back_thigh_pitch_link>
+            rel physics:body1 = </robinion/Geometry/base_link/lower_body_link/left_hip_yaw_link/left_hip_roll_pitch_link/left_front_thigh_pitch_link/left_knee_pitch_link>
+            float physics:breakForce = 3.4028235e38
+            float physics:breakTorque = 3.4028235e38
+            uniform bool physics:excludeFromArticulation = 1
+            point3f physics:localPos0 = (0, 0, -0.2)
+            point3f physics:localPos1 = (-0.04125, 0, 0)
+            quatf physics:localRot0 = (1, 0, 0, 0)
+            quatf physics:localRot1 = (1, 0, 0, 0)
+        }
+
+        def PhysicsRevoluteJoint "left_back_shin_loop_joint"
+        {
+            uniform token physics:axis = "Y"
+            rel physics:body0 = </robinion/Geometry/base_link/lower_body_link/left_hip_yaw_link/left_hip_roll_pitch_link/left_front_thigh_pitch_link/left_knee_pitch_link/left_back_shin_pitch_link>
+            rel physics:body1 = </robinion/Geometry/base_link/lower_body_link/left_hip_yaw_link/left_hip_roll_pitch_link/left_front_thigh_pitch_link/left_knee_pitch_link/left_front_shin_pitch_link/left_ankle_roll_pitch_link>
+            float physics:breakForce = 3.4028235e38
+            float physics:breakTorque = 3.4028235e38
+            uniform bool physics:excludeFromArticulation = 1
+            point3f physics:localPos0 = (0, 0, -0.2)
+            point3f physics:localPos1 = (-0.04125, 0, 0)
+            quatf physics:localRot0 = (1, 0, 0, 0)
+            quatf physics:localRot1 = (1, 0, 0, 0)
+        }
+
+        over "base_to_lower_body_fixed_joint" (
+            active = false
+        )
+        {
+        }
+    }
+}
+
+def PhysicsScene "PhysicsScene" (
+    prepend apiSchemas = ["PhysxSceneAPI"]
+    prepend payload = @./Payload/Contents.usda@</PhysicsScene>
+)
+{
+}
+
+def "Render" (
+    hide_in_stage_window = true
+    no_delete = true
+)
+{
+    def "OmniverseKit"
+    {
+        def "HydraTextures" (
+            hide_in_stage_window = true
+            no_delete = true
+        )
+        {
+            def RenderProduct "omni_kit_widget_viewport_ViewportTexture_0" (
+                prepend apiSchemas = ["OmniRtxSettingsCommonAdvancedAPI_1", "OmniRtxSettingsRtAdvancedAPI_1", "OmniRtxSettingsPtAdvancedAPI_1", "OmniRtxPostColorGradingAPI_1", "OmniRtxPostChromaticAberrationAPI_1", "OmniRtxPostBloomPhysicalAPI_1", "OmniRtxPostMatteObjectAPI_1", "OmniRtxPostCompositingAPI_1", "OmniRtxPostDofAPI_1", "OmniRtxPostMotionBlurAPI_1", "OmniRtxPostTvNoiseAPI_1", "OmniRtxPostTonemapIrayReinhardAPI_1", "OmniRtxPostDebugSettingsAPI_1", "OmniRtxDebugSettingsAPI_1"]
+                hide_in_stage_window = true
+                no_delete = true
+            )
+            {
+                rel camera = </OmniverseKit_Persp>
+                token omni:rtx:ambientOcclusion:denoiserMode = "none"
+                token omni:rtx:background:source:texture:textureMode = "repeatMirrored"
+                token omni:rtx:background:source:type = "domeLight"
+                bool omni:rtx:debug:view:pixelDebug:enableFixedTextPos = 1
+                token omni:rtx:directLighting:sampledLighting:denoisingTechnique = "None"
+                bool omni:rtx:dlss:frameGeneration = 0
+                float3 omni:rtx:domeLight:rotationAxis = (0, 0, 1)
+                bool omni:rtx:indirectDiffuse:denoiser:enabled = 0
+                bool omni:rtx:material:db:syncLoads = 1
+                token omni:rtx:post:dlss:execMode = "performance"
+                bool omni:rtx:post:registeredCompositing:invertColorCorrection = 1
+                bool omni:rtx:post:registeredCompositing:invertToneMap = 1
+                bool omni:rtx:pt:adaptiveSampling:filterError = 0
+                uint omni:rtx:pt:adaptiveSampling:fixedSppIterations = 2
+                uint omni:rtx:pt:maxSamplesPerLaunch = 2073600
+                uint omni:rtx:pt:mgpu:maxPixelsPerRegionExponent = 12
+                bool omni:rtx:reflections:denoiser:enabled = 0
+                token omni:rtx:rendermode = "RealTimePathTracing"
+                color3f omni:rtx:rt:ambientLight:color = (0.1, 0.1, 0.1)
+                bool omni:rtx:rt:demoire = 0
+                bool omni:rtx:rt:ecoMode:enabled
+                bool omni:rtx:rt:lightcache:spatialCache:dontResolveConflicts = 1
+                int omni:rtx:rt:sss:samples = 1
+                uint omni:rtx:rtpt:maxVolumeBounces = 15
+                float omni:rtx:rtpt:modulatingRoughnessThreshold = 0.08
+                bool omni:rtx:scene:hydra:materialSyncLoads = 1
+                bool omni:rtx:scene:hydra:mdlMaterialWarmup = 1
+                rel orderedVars = </Render/Vars/LdrColor>
+                custom bool overrideClipRange = 0
+                uniform int2 resolution = (512, 512)
+            }
+        }
+    }
+
+    def RenderSettings "OmniverseGlobalRenderSettings" (
+        prepend apiSchemas = ["OmniRtxSettingsGlobalRtAdvancedAPI_1", "OmniRtxSettingsGlobalPtAdvancedAPI_1"]
+        no_delete = true
+    )
+    {
+        rel products = </Render/OmniverseKit/HydraTextures/omni_kit_widget_viewport_ViewportTexture_0>
+    }
+
+    def "Vars"
+    {
+        def RenderVar "LdrColor" (
+            hide_in_stage_window = true
+            no_delete = true
+        )
+        {
+            uniform string sourceName = "LdrColor"
+            uniform token sourceType = "raw"
+        }
+    }
+}
+
+over "OmniverseKit_Persp" (
+    prepend apiSchemas = ["OmniRtxCameraAutoExposureAPI_1", "OmniRtxCameraExposureAPI_1"]
+    customData = {
+        dictionary omni = {
+            dictionary kit = {
+                bool hide_in_stage_window = 1
+                bool no_delete = 1
+            }
+        }
+    }
+    hide_in_stage_window = true
+    kind = "component"
+    no_delete = true
+)
+{
+    float2 clippingRange = (0.01, 10000000)
+    float exposure:fStop = 5
+    float exposure:responsivity = 1.1026709
+    float exposure:time = 0.02
+    float focalLength = 18.147562
+    float focusDistance = 400
+    custom uniform vector3d omni:kit:centerOfInterest = (0, 0, -0.04587687793792958)
+    float3 xformOp:rotateXYZ = (47.30432, 4.770832e-14, 127.29344)
+    float3 xformOp:scale = (1, 1, 1)
+    double3 xformOp:translate = (0.307281029429101, 0.2361512094986671, 0.7843019777954489)
+    uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+}
+
+over "OmniverseKit_Front" (
+    customData = {
+        dictionary omni = {
+            dictionary kit = {
+                bool hide_in_stage_window = 1
+                bool no_delete = 1
+            }
+        }
+    }
+    hide_in_stage_window = true
+    kind = "component"
+    no_delete = true
+)
+{
+    float2 clippingRange = (1, 10000000)
+    float horizontalAperture = 50
+    custom uniform vector3d omni:kit:centerOfInterest = (0, 0, -5)
+    token projection = "orthographic"
+    float verticalAperture = 50
+    float3 xformOp:rotateXYZ = (90, -1.2722219e-14, 90)
+    float3 xformOp:scale = (1, 1, 1)
+    double3 xformOp:translate = (5, 0, 0)
+    uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+}
+
+over "OmniverseKit_Right" (
+    customData = {
+        dictionary omni = {
+            dictionary kit = {
+                bool hide_in_stage_window = 1
+                bool no_delete = 1
+            }
+        }
+    }
+    hide_in_stage_window = true
+    kind = "component"
+    no_delete = true
+)
+{
+    float2 clippingRange = (1, 10000000)
+    float horizontalAperture = 50
+    custom uniform vector3d omni:kit:centerOfInterest = (0, 0, -5)
+    token projection = "orthographic"
+    float verticalAperture = 50
+    float3 xformOp:rotateXYZ = (90, -1.41245e-30, 1.2722219e-14)
+    float3 xformOp:scale = (1, 1, 1)
+    double3 xformOp:translate = (0, -5, 0)
+    uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+}
+
+over "OmniverseKit_Top" (
+    customData = {
+        dictionary omni = {
+            dictionary kit = {
+                bool hide_in_stage_window = 1
+                bool no_delete = 1
+            }
+        }
+    }
+    hide_in_stage_window = true
+    kind = "component"
+    no_delete = true
+)
+{
+    float2 clippingRange = (1, 10000000)
+    float horizontalAperture = 50
+    custom uniform vector3d omni:kit:centerOfInterest = (0, 0, -5)
+    token projection = "orthographic"
+    float verticalAperture = 50
+    float3 xformOp:rotateXYZ = (-1.2722219e-14, -7.016709e-15, -90)
+    float3 xformOp:scale = (1, 1, 1)
+    double3 xformOp:translate = (0, 0, 5)
+    uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+}
+

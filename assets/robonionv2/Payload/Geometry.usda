@@ -1,0 +1,1020 @@
+#usda 1.0
+(
+    "newly converted"
+    customLayerData = {
+        string creator = "URDF USD Converter v0.3.2"
+    }
+    defaultPrim = "robinion"
+    kilogramsPerUnit = 1
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+
+def Xform "robinion"
+{
+    def Scope "Geometry"
+    {
+        def Xform "base_link"
+        {
+            def Xform "lower_body_link"
+            {
+                quatf xformOp:orient = (1, 0, 0, 0)
+                float3 xformOp:scale = (1, 1, 1)
+                double3 xformOp:translate = (0, 0, 0)
+                uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+
+                def Mesh "lower_body_visual" (
+                    prepend references = @./GeometryLibrary.usdc@</Geometry/lower_body_visual>
+                )
+                {
+                    quatf xformOp:orient = (1, 0, 0, 0)
+                    float3 xformOp:scale = (1, 1, 1)
+                    double3 xformOp:translate = (0, 0, 0.006)
+                    uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+                }
+
+                def Cube "box"
+                {
+                    float3[] extent = [(-0.5, -0.5, -0.5), (0.5, 0.5, 0.5)]
+                    uniform token purpose = "guide"
+                    double size = 1
+                    quatf xformOp:orient = (1, 0, 0, 0)
+                    float3 xformOp:scale = (0.114, 0.152, 0.056)
+                    double3 xformOp:translate = (-0.007, 0, 0.032)
+                    uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+                }
+
+                def Xform "upper_body_link"
+                {
+                    quatf xformOp:orient = (1, 0, 0, 0)
+                    float3 xformOp:scale = (1, 1, 1)
+                    double3 xformOp:translate = (0.019, 0.0245, 0.07675)
+                    uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+
+                    def Mesh "upper_body_visual" (
+                        prepend references = @./GeometryLibrary.usdc@</Geometry/upper_body_visual>
+                    )
+                    {
+                        quatf xformOp:orient = (1, 0, 0, 0)
+                        float3 xformOp:scale = (1, 1, 1)
+                        double3 xformOp:translate = (0, 0, 0)
+                        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+                    }
+
+                    def Cube "box"
+                    {
+                        float3[] extent = [(-0.5, -0.5, -0.5), (0.5, 0.5, 0.5)]
+                        uniform token purpose = "guide"
+                        double size = 1
+                        quatf xformOp:orient = (1, 0, 0, 0)
+                        float3 xformOp:scale = (0.113, 0.172, 0.135)
+                        double3 xformOp:translate = (-0.027, -0.0245, 0.095)
+                        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+                    }
+
+                    def Xform "imu_link"
+                    {
+                        quatf xformOp:orient = (1, 0, 0, 0)
+                        float3 xformOp:scale = (1, 1, 1)
+                        double3 xformOp:translate = (-0.021, -0.025, 0.122)
+                        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+                    }
+
+                    def Xform "head_yaw_link"
+                    {
+                        quatf xformOp:orient = (1, 0, 0, 0)
+                        float3 xformOp:scale = (1, 1, 1)
+                        double3 xformOp:translate = (-0.0125, -0.0245, 0.183051)
+                        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+
+                        def Mesh "head_yaw_visual" (
+                            prepend references = @./GeometryLibrary.usdc@</Geometry/head_yaw_visual>
+                        )
+                        {
+                            quatf xformOp:orient = (1, 0, 0, 0)
+                            float3 xformOp:scale = (1, 1, 1)
+                            double3 xformOp:translate = (0, 0, 0)
+                            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+                        }
+
+                        def Xform "head_pitch_link"
+                        {
+                            quatf xformOp:orient = (1, 0, 0, 0)
+                            float3 xformOp:scale = (1, 1, 1)
+                            double3 xformOp:translate = (0, 0.019, 0.047)
+                            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+
+                            def Mesh "head_pitch_visual" (
+                                prepend references = @./GeometryLibrary.usdc@</Geometry/head_pitch_visual>
+                            )
+                            {
+                                quatf xformOp:orient = (1, 0, 0, 0)
+                                float3 xformOp:scale = (1, 1, 1)
+                                double3 xformOp:translate = (0, 0, 0)
+                                uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+                            }
+
+                            def Cube "box"
+                            {
+                                float3[] extent = [(-0.5, -0.5, -0.5), (0.5, 0.5, 0.5)]
+                                uniform token purpose = "guide"
+                                double size = 1
+                                quatf xformOp:orient = (1, 0, 0, 0)
+                                float3 xformOp:scale = (0.04, 0.09, 0.028)
+                                double3 xformOp:translate = (0, -0.019, 0.054)
+                                uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+                            }
+
+                            def Xform "cam_link"
+                            {
+                                quatf xformOp:orient = (1, 0, 0, 0)
+                                float3 xformOp:scale = (1, 1, 1)
+                                double3 xformOp:translate = (0.019, -0.019, 0.054)
+                                uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+                            }
+                        }
+                    }
+
+                    def Xform "right_shoulder_pitch_link"
+                    {
+                        quatf xformOp:orient = (0.9990475, 0, 0.043635502, 0)
+                        float3 xformOp:scale = (1, 1, 1)
+                        double3 xformOp:translate = (-0.02089, -0.1305, 0.1388)
+                        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+
+                        def Mesh "right_shoulder_pitch_visual" (
+                            prepend references = @./GeometryLibrary.usdc@</Geometry/right_shoulder_pitch_visual>
+                        )
+                        {
+                            quatf xformOp:orient = (1, 0, 0, 0)
+                            float3 xformOp:scale = (1, 1, 1)
+                            double3 xformOp:translate = (0, 0, 0)
+                            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+                        }
+
+                        def Xform "right_shoulder_roll_link"
+                        {
+                            quatf xformOp:orient = (1, 0, 0, 0)
+                            float3 xformOp:scale = (1, 1, 1)
+                            double3 xformOp:translate = (0.0245, -0.030017, -0.022)
+                            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+
+                            def Mesh "right_shoulder_roll_visual" (
+                                prepend references = @./GeometryLibrary.usdc@</Geometry/right_shoulder_roll_visual>
+                            )
+                            {
+                                quatf xformOp:orient = (1, 0, 0, 0)
+                                float3 xformOp:scale = (1, 1, 1)
+                                double3 xformOp:translate = (0, 0, 0)
+                                uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+                            }
+
+                            def Cube "box"
+                            {
+                                float3[] extent = [(-0.5, -0.5, -0.5), (0.5, 0.5, 0.5)]
+                                uniform token purpose = "guide"
+                                double size = 1
+                                quatf xformOp:orient = (1, 0, 0, 0)
+                                float3 xformOp:scale = (0.05, 0.127, 0.05)
+                                double3 xformOp:translate = (-0.0245, -0.057, 0)
+                                uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+                            }
+
+                            def Xform "right_elbow_yaw_link"
+                            {
+                                quatf xformOp:orient = (-0.70710677, 0.70710677, 0, 0)
+                                float3 xformOp:scale = (1, 1, 1)
+                                double3 xformOp:translate = (-0.0245, -0.118, 0)
+                                uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+
+                                def Mesh "right_elbow_yaw_visual" (
+                                    prepend references = @./GeometryLibrary.usdc@</Geometry/right_elbow_yaw_visual>
+                                )
+                                {
+                                    quatf xformOp:orient = (0.70710677, 0.70710677, 0, 0)
+                                    float3 xformOp:scale = (1, 1, 1)
+                                    double3 xformOp:translate = (0, 0, 0)
+                                    uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+                                }
+
+                                def Xform "right_elbow_pitch_link"
+                                {
+                                    quatf xformOp:orient = (1, 0, 0, 0)
+                                    float3 xformOp:scale = (1, 1, 1)
+                                    double3 xformOp:translate = (0.022, -0.0245, -0.06)
+                                    uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+
+                                    def Mesh "right_elbow_pitch_visual" (
+                                        prepend references = @./GeometryLibrary.usdc@</Geometry/right_elbow_pitch_visual>
+                                    )
+                                    {
+                                        quatf xformOp:orient = (0.70710677, 0.70710677, 0, 0)
+                                        float3 xformOp:scale = (1, 1, 1)
+                                        double3 xformOp:translate = (0, 0, 0)
+                                        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+                                    }
+
+                                    def Cube "box"
+                                    {
+                                        float3[] extent = [(-0.5, -0.5, -0.5), (0.5, 0.5, 0.5)]
+                                        uniform token purpose = "guide"
+                                        double size = 1
+                                        quatf xformOp:orient = (1, 0, 0, 0)
+                                        float3 xformOp:scale = (0.04, 0.049, 0.078)
+                                        double3 xformOp:translate = (0, 0.0245, -0.028)
+                                        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+                                    }
+
+                                    def Xform "right_gripper"
+                                    {
+                                        quatf xformOp:orient = (1, 0, 0, 0)
+                                        float3 xformOp:scale = (1, 1, 1)
+                                        double3 xformOp:translate = (0, 0.0245, -0.068)
+                                        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+
+                                        def Mesh "right_gripper_visual" (
+                                            prepend references = @./GeometryLibrary.usdc@</Geometry/right_gripper_visual>
+                                        )
+                                        {
+                                            quatf xformOp:orient = (0.70710677, 0.70710677, 0, 0)
+                                            float3 xformOp:scale = (1, 1, 1)
+                                            double3 xformOp:translate = (0, 0, 0)
+                                            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+                                        }
+
+                                        def Cube "box"
+                                        {
+                                            float3[] extent = [(-0.5, -0.5, -0.5), (0.5, 0.5, 0.5)]
+                                            uniform token purpose = "guide"
+                                            double size = 1
+                                            quatf xformOp:orient = (1, 0, 0, 0)
+                                            float3 xformOp:scale = (0.05, 0.06, 0.09)
+                                            double3 xformOp:translate = (0, 0, -0.05)
+                                            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    def Xform "left_shoulder_pitch_link"
+                    {
+                        quatf xformOp:orient = (0.9990475, 0, 0.043635502, 0)
+                        float3 xformOp:scale = (1, 1, 1)
+                        double3 xformOp:translate = (-0.02089, 0.0815, 0.1388)
+                        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+
+                        def Mesh "left_shoulder_pitch_visual" (
+                            prepend references = @./GeometryLibrary.usdc@</Geometry/left_shoulder_pitch_visual>
+                        )
+                        {
+                            quatf xformOp:orient = (1, 0, 0, 0)
+                            float3 xformOp:scale = (1, 1, 1)
+                            double3 xformOp:translate = (0, 0, 0)
+                            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+                        }
+
+                        def Xform "left_shoulder_roll_link"
+                        {
+                            quatf xformOp:orient = (1, 0, 0, 0)
+                            float3 xformOp:scale = (1, 1, 1)
+                            double3 xformOp:translate = (0.0245, 0.030017, -0.022)
+                            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+
+                            def Mesh "left_shoulder_roll_visual" (
+                                prepend references = @./GeometryLibrary.usdc@</Geometry/left_shoulder_roll_visual>
+                            )
+                            {
+                                quatf xformOp:orient = (1, 0, 0, 0)
+                                float3 xformOp:scale = (1, 1, 1)
+                                double3 xformOp:translate = (0, 0, 0)
+                                uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+                            }
+
+                            def Cube "box"
+                            {
+                                float3[] extent = [(-0.5, -0.5, -0.5), (0.5, 0.5, 0.5)]
+                                uniform token purpose = "guide"
+                                double size = 1
+                                quatf xformOp:orient = (1, 0, 0, 0)
+                                float3 xformOp:scale = (0.05, 0.127, 0.05)
+                                double3 xformOp:translate = (-0.0245, 0.057, 0)
+                                uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+                            }
+
+                            def Xform "left_elbow_yaw_link"
+                            {
+                                quatf xformOp:orient = (0.70710677, 0.70710677, 0, 0)
+                                float3 xformOp:scale = (1, 1, 1)
+                                double3 xformOp:translate = (-0.0245, 0.118, 0)
+                                uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+
+                                def Mesh "left_elbow_yaw_visual" (
+                                    prepend references = @./GeometryLibrary.usdc@</Geometry/left_elbow_yaw_visual>
+                                )
+                                {
+                                    quatf xformOp:orient = (-0.70710677, 0.70710677, 0, 0)
+                                    float3 xformOp:scale = (1, 1, 1)
+                                    double3 xformOp:translate = (0, 0, 0)
+                                    uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+                                }
+
+                                def Xform "left_elbow_pitch_link"
+                                {
+                                    quatf xformOp:orient = (1, 0, 0, 0)
+                                    float3 xformOp:scale = (1, 1, 1)
+                                    double3 xformOp:translate = (0.022, 0.0245, -0.06)
+                                    uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+
+                                    def Mesh "left_elbow_pitch_visual" (
+                                        prepend references = @./GeometryLibrary.usdc@</Geometry/left_elbow_pitch_visual>
+                                    )
+                                    {
+                                        quatf xformOp:orient = (-0.70710677, 0.70710677, 0, 0)
+                                        float3 xformOp:scale = (1, 1, 1)
+                                        double3 xformOp:translate = (0, 0, 0)
+                                        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+                                    }
+
+                                    def Cube "box"
+                                    {
+                                        float3[] extent = [(-0.5, -0.5, -0.5), (0.5, 0.5, 0.5)]
+                                        uniform token purpose = "guide"
+                                        double size = 1
+                                        quatf xformOp:orient = (1, 0, 0, 0)
+                                        float3 xformOp:scale = (0.04, 0.049, 0.078)
+                                        double3 xformOp:translate = (0, -0.0245, -0.028)
+                                        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+                                    }
+
+                                    def Xform "left_gripper"
+                                    {
+                                        quatf xformOp:orient = (1, 0, 0, 0)
+                                        float3 xformOp:scale = (1, 1, 1)
+                                        double3 xformOp:translate = (0, -0.0245, -0.068)
+                                        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+
+                                        def Mesh "left_gripper_visual" (
+                                            prepend references = @./GeometryLibrary.usdc@</Geometry/left_gripper_visual>
+                                        )
+                                        {
+                                            quatf xformOp:orient = (-0.70710677, 0.70710677, 0, 0)
+                                            float3 xformOp:scale = (1, 1, 1)
+                                            double3 xformOp:translate = (0, 0, 0)
+                                            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+                                        }
+
+                                        def Cube "box"
+                                        {
+                                            float3[] extent = [(-0.5, -0.5, -0.5), (0.5, 0.5, 0.5)]
+                                            uniform token purpose = "guide"
+                                            double size = 1
+                                            quatf xformOp:orient = (1, 0, 0, 0)
+                                            float3 xformOp:scale = (0.05, 0.06, 0.09)
+                                            double3 xformOp:translate = (0, 0, -0.05)
+                                            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                def Xform "right_hip_yaw_link"
+                {
+                    quatf xformOp:orient = (1, 0, 0, 0)
+                    float3 xformOp:scale = (1, 1, 1)
+                    double3 xformOp:translate = (0, -0.055, 0)
+                    uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+
+                    def Mesh "right_hip_yaw_visual" (
+                        prepend references = @./GeometryLibrary.usdc@</Geometry/right_hip_yaw_visual>
+                    )
+                    {
+                        quatf xformOp:orient = (1, 0, 0, 0)
+                        float3 xformOp:scale = (1, 1, 1)
+                        double3 xformOp:translate = (0, 0, 0)
+                        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+                    }
+
+                    def Cube "box"
+                    {
+                        float3[] extent = [(-0.5, -0.5, -0.5), (0.5, 0.5, 0.5)]
+                        uniform token purpose = "guide"
+                        double size = 1
+                        quatf xformOp:orient = (1, 0, 0, 0)
+                        float3 xformOp:scale = (0.096, 0.035, 0.006)
+                        double3 xformOp:translate = (0.002875, 0, -0.003)
+                        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+                    }
+
+                    def Xform "right_hip_roll_pitch_link"
+                    {
+                        quatf xformOp:orient = (1, 0, 0, 0)
+                        float3 xformOp:scale = (1, 1, 1)
+                        double3 xformOp:translate = (0.047875, 0, -0.05)
+                        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+
+                        def Mesh "right_hip_roll_pitch_visual" (
+                            prepend references = @./GeometryLibrary.usdc@</Geometry/right_hip_roll_pitch_visual>
+                        )
+                        {
+                            quatf xformOp:orient = (1, 0, 0, 0)
+                            float3 xformOp:scale = (1, 1, 1)
+                            double3 xformOp:translate = (0, 0, 0)
+                            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+                        }
+
+                        def Cube "box"
+                        {
+                            float3[] extent = [(-0.5, -0.5, -0.5), (0.5, 0.5, 0.5)]
+                            uniform token purpose = "guide"
+                            double size = 1
+                            quatf xformOp:orient = (1, 0, 0, 0)
+                            float3 xformOp:scale = (0.08, 0.0335, 0.0645)
+                            double3 xformOp:translate = (-0.045, 0, -0.0155)
+                            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+                        }
+
+                        def Xform "right_front_thigh_pitch_link"
+                        {
+                            quatf xformOp:orient = (1, 0, 0, 0)
+                            float3 xformOp:scale = (1, 1, 1)
+                            double3 xformOp:translate = (-0.0245, 0.0245, 0)
+                            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+
+                            def Mesh "right_thigh_visual" (
+                                prepend references = @./GeometryLibrary.usdc@</Geometry/right_thigh_visual>
+                            )
+                            {
+                                quatf xformOp:orient = (1, 0, 0, 0)
+                                float3 xformOp:scale = (1, 1, 1)
+                                double3 xformOp:translate = (0, 0, 0)
+                                uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+                            }
+
+                            def Cube "box"
+                            {
+                                float3[] extent = [(-0.5, -0.5, -0.5), (0.5, 0.5, 0.5)]
+                                uniform token purpose = "guide"
+                                double size = 1
+                                quatf xformOp:orient = (0.99891806, 0, -0.046505015, 0)
+                                float3 xformOp:scale = (0.007, 0.0545, 0.09)
+                                double3 xformOp:translate = (0.015, -0.0245, -0.1)
+                                uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+                            }
+
+                            def Xform "right_knee_pitch_link"
+                            {
+                                quatf xformOp:orient = (1, 0, 0, 0)
+                                float3 xformOp:scale = (1, 1, 1)
+                                double3 xformOp:translate = (0, 0, -0.2)
+                                uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+
+                                def Mesh "right_knee_visual" (
+                                    prepend references = @./GeometryLibrary.usdc@</Geometry/right_knee_visual>
+                                )
+                                {
+                                    quatf xformOp:orient = (1, 0, 0, 0)
+                                    float3 xformOp:scale = (1, 1, 1)
+                                    double3 xformOp:translate = (0, 0, 0)
+                                    uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+                                }
+
+                                def Cube "box"
+                                {
+                                    float3[] extent = [(-0.5, -0.5, -0.5), (0.5, 0.5, 0.5)]
+                                    uniform token purpose = "guide"
+                                    double size = 1
+                                    quatf xformOp:orient = (1, 0, 0, 0)
+                                    float3 xformOp:scale = (0.0705, 0.047, 0.066)
+                                    double3 xformOp:translate = (-0.01825, -0.0245, -0.01775)
+                                    uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+                                }
+
+                                def Xform "right_front_shin_pitch_link"
+                                {
+                                    quatf xformOp:orient = (1, 0, 0, 0)
+                                    float3 xformOp:scale = (1, 1, 1)
+                                    double3 xformOp:translate = (0, 0, -0.04775)
+                                    uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+
+                                    def Mesh "right_shin_visual" (
+                                        prepend references = @./GeometryLibrary.usdc@</Geometry/right_shin_visual>
+                                    )
+                                    {
+                                        quatf xformOp:orient = (1, 0, 0, 0)
+                                        float3 xformOp:scale = (1, 1, 1)
+                                        double3 xformOp:translate = (0, 0, 0)
+                                        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+                                    }
+
+                                    def Cube "box"
+                                    {
+                                        float3[] extent = [(-0.5, -0.5, -0.5), (0.5, 0.5, 0.5)]
+                                        uniform token purpose = "guide"
+                                        double size = 1
+                                        quatf xformOp:orient = (0.99891806, 0, 0.046505015, 0)
+                                        float3 xformOp:scale = (0.007, 0.0545, 0.09)
+                                        double3 xformOp:translate = (0.015, -0.0245, -0.1)
+                                        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+                                    }
+
+                                    def Xform "right_ankle_roll_pitch_link"
+                                    {
+                                        quatf xformOp:orient = (1, 0, 0, 0)
+                                        float3 xformOp:scale = (1, 1, 1)
+                                        double3 xformOp:translate = (0, 0, -0.2)
+                                        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+
+                                        def Mesh "right_ankle_roll_pitch_visual" (
+                                            prepend references = @./GeometryLibrary.usdc@</Geometry/right_ankle_roll_pitch_visual>
+                                        )
+                                        {
+                                            quatf xformOp:orient = (1, 0, 0, 0)
+                                            float3 xformOp:scale = (1, 1, 1)
+                                            double3 xformOp:translate = (0.0245, -0.0245, 0)
+                                            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+                                        }
+
+                                        def Cube "box"
+                                        {
+                                            float3[] extent = [(-0.5, -0.5, -0.5), (0.5, 0.5, 0.5)]
+                                            uniform token purpose = "guide"
+                                            double size = 1
+                                            quatf xformOp:orient = (1, 0, 0, 0)
+                                            float3 xformOp:scale = (0.08, 0.0335, 0.0645)
+                                            double3 xformOp:translate = (-0.022, -0.0245, 0.0155)
+                                            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+                                        }
+
+                                        def Xform "right_foot_roll_link"
+                                        {
+                                            quatf xformOp:orient = (1, 0, 0, 0)
+                                            float3 xformOp:scale = (1, 1, 1)
+                                            double3 xformOp:translate = (0.0245, -0.02425, 0)
+                                            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+
+                                            def Mesh "right_foot_visual" (
+                                                prepend references = @./GeometryLibrary.usdc@</Geometry/right_foot_visual>
+                                            )
+                                            {
+                                                quatf xformOp:orient = (1, 0, 0, 0)
+                                                float3 xformOp:scale = (1, 1, 1)
+                                                double3 xformOp:translate = (0, 0, 0)
+                                                uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+                                            }
+
+                                            def Mesh "right_foot_visual_1" (
+                                                displayName = "right_foot_visual"
+                                                prepend references = @./GeometryLibrary.usdc@</Geometry/right_foot_visual>
+                                            )
+                                            {
+                                                uniform token purpose = "guide"
+                                                quatf xformOp:orient = (1, 0, 0, 0)
+                                                float3 xformOp:scale = (1, 1, 1)
+                                                double3 xformOp:translate = (0, 0, 0)
+                                                uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+                                            }
+                                        }
+                                    }
+                                }
+
+                                def Xform "right_back_shin_pitch_link"
+                                {
+                                    quatf xformOp:orient = (1, 0, 0, 0)
+                                    float3 xformOp:scale = (1, 1, 1)
+                                    double3 xformOp:translate = (-0.04125, 0, -0.04775)
+                                    uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+
+                                    def Mesh "right_back_shin_visual" (
+                                        prepend references = @./GeometryLibrary.usdc@</Geometry/right_back_shin_visual>
+                                    )
+                                    {
+                                        quatf xformOp:orient = (1, 0, 0, 0)
+                                        float3 xformOp:scale = (1, 1, 1)
+                                        double3 xformOp:translate = (0, 0, 0)
+                                        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+                                    }
+
+                                    def Cube "box"
+                                    {
+                                        float3[] extent = [(-0.5, -0.5, -0.5), (0.5, 0.5, 0.5)]
+                                        uniform token purpose = "guide"
+                                        double size = 1
+                                        quatf xformOp:orient = (0.99891806, 0, 0.046505015, 0)
+                                        float3 xformOp:scale = (0.007, 0.0545, 0.057)
+                                        double3 xformOp:translate = (-0.015, -0.0245, -0.095)
+                                        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+                                    }
+                                }
+                            }
+                        }
+
+                        def Xform "right_back_thigh_pitch_link"
+                        {
+                            quatf xformOp:orient = (1, 0, 0, 0)
+                            float3 xformOp:scale = (1, 1, 1)
+                            double3 xformOp:translate = (-0.06575, 0.0245, 0)
+                            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+
+                            def Mesh "right_back_thigh_visual" (
+                                prepend references = @./GeometryLibrary.usdc@</Geometry/right_back_thigh_visual>
+                            )
+                            {
+                                quatf xformOp:orient = (1, 0, 0, 0)
+                                float3 xformOp:scale = (1, 1, 1)
+                                double3 xformOp:translate = (0, 0, 0)
+                                uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+                            }
+
+                            def Cube "box"
+                            {
+                                float3[] extent = [(-0.5, -0.5, -0.5), (0.5, 0.5, 0.5)]
+                                uniform token purpose = "guide"
+                                double size = 1
+                                quatf xformOp:orient = (0.99891806, 0, -0.046505015, 0)
+                                float3 xformOp:scale = (0.007, 0.0545, 0.057)
+                                double3 xformOp:translate = (-0.015, -0.0245, -0.105)
+                                uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+                            }
+                        }
+                    }
+                }
+
+                def Xform "left_hip_yaw_link"
+                {
+                    quatf xformOp:orient = (1, 0, 0, 0)
+                    float3 xformOp:scale = (1, 1, 1)
+                    double3 xformOp:translate = (0, 0.055, 0)
+                    uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+
+                    def Mesh "left_hip_yaw_visual" (
+                        prepend references = @./GeometryLibrary.usdc@</Geometry/left_hip_yaw_visual>
+                    )
+                    {
+                        quatf xformOp:orient = (1, 0, 0, 0)
+                        float3 xformOp:scale = (1, 1, 1)
+                        double3 xformOp:translate = (0, 0, 0)
+                        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+                    }
+
+                    def Cube "box"
+                    {
+                        float3[] extent = [(-0.5, -0.5, -0.5), (0.5, 0.5, 0.5)]
+                        uniform token purpose = "guide"
+                        double size = 1
+                        quatf xformOp:orient = (1, 0, 0, 0)
+                        float3 xformOp:scale = (0.096, 0.035, 0.006)
+                        double3 xformOp:translate = (0.002875, 0, -0.003)
+                        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+                    }
+
+                    def Xform "left_hip_roll_pitch_link"
+                    {
+                        quatf xformOp:orient = (1, 0, 0, 0)
+                        float3 xformOp:scale = (1, 1, 1)
+                        double3 xformOp:translate = (0.047875, 0, -0.05)
+                        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+
+                        def Mesh "left_hip_roll_pitch_visual" (
+                            prepend references = @./GeometryLibrary.usdc@</Geometry/left_hip_roll_pitch_visual>
+                        )
+                        {
+                            quatf xformOp:orient = (1, 0, 0, 0)
+                            float3 xformOp:scale = (1, 1, 1)
+                            double3 xformOp:translate = (0, 0, 0)
+                            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+                        }
+
+                        def Cube "box"
+                        {
+                            float3[] extent = [(-0.5, -0.5, -0.5), (0.5, 0.5, 0.5)]
+                            uniform token purpose = "guide"
+                            double size = 1
+                            quatf xformOp:orient = (1, 0, 0, 0)
+                            float3 xformOp:scale = (0.08, 0.0335, 0.0645)
+                            double3 xformOp:translate = (-0.045, 0, -0.0155)
+                            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+                        }
+
+                        def Xform "left_front_thigh_pitch_link"
+                        {
+                            quatf xformOp:orient = (1, 0, 0, 0)
+                            float3 xformOp:scale = (1, 1, 1)
+                            double3 xformOp:translate = (-0.0245, 0.0245, 0)
+                            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+
+                            def Mesh "left_thigh_visual" (
+                                prepend references = @./GeometryLibrary.usdc@</Geometry/left_thigh_visual>
+                            )
+                            {
+                                quatf xformOp:orient = (1, 0, 0, 0)
+                                float3 xformOp:scale = (1, 1, 1)
+                                double3 xformOp:translate = (0, 0, 0)
+                                uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+                            }
+
+                            def Cube "box"
+                            {
+                                float3[] extent = [(-0.5, -0.5, -0.5), (0.5, 0.5, 0.5)]
+                                uniform token purpose = "guide"
+                                double size = 1
+                                quatf xformOp:orient = (0.99891806, 0, -0.046505015, 0)
+                                float3 xformOp:scale = (0.007, 0.0545, 0.09)
+                                double3 xformOp:translate = (0.015, -0.0245, -0.1)
+                                uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+                            }
+
+                            def Xform "left_knee_pitch_link"
+                            {
+                                quatf xformOp:orient = (1, 0, 0, 0)
+                                float3 xformOp:scale = (1, 1, 1)
+                                double3 xformOp:translate = (0, 0, -0.2)
+                                uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+
+                                def Mesh "left_knee_visual" (
+                                    prepend references = @./GeometryLibrary.usdc@</Geometry/left_knee_visual>
+                                )
+                                {
+                                    quatf xformOp:orient = (1, 0, 0, 0)
+                                    float3 xformOp:scale = (1, 1, 1)
+                                    double3 xformOp:translate = (0, 0, 0)
+                                    uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+                                }
+
+                                def Cube "box"
+                                {
+                                    float3[] extent = [(-0.5, -0.5, -0.5), (0.5, 0.5, 0.5)]
+                                    uniform token purpose = "guide"
+                                    double size = 1
+                                    quatf xformOp:orient = (1, 0, 0, 0)
+                                    float3 xformOp:scale = (0.0705, 0.047, 0.066)
+                                    double3 xformOp:translate = (-0.01825, -0.0245, -0.01775)
+                                    uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+                                }
+
+                                def Xform "left_front_shin_pitch_link"
+                                {
+                                    quatf xformOp:orient = (1, 0, 0, 0)
+                                    float3 xformOp:scale = (1, 1, 1)
+                                    double3 xformOp:translate = (0, 0, -0.04775)
+                                    uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+
+                                    def Mesh "left_shin_visual" (
+                                        prepend references = @./GeometryLibrary.usdc@</Geometry/left_shin_visual>
+                                    )
+                                    {
+                                        quatf xformOp:orient = (1, 0, 0, 0)
+                                        float3 xformOp:scale = (1, 1, 1)
+                                        double3 xformOp:translate = (0, 0, 0)
+                                        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+                                    }
+
+                                    def Cube "box"
+                                    {
+                                        float3[] extent = [(-0.5, -0.5, -0.5), (0.5, 0.5, 0.5)]
+                                        uniform token purpose = "guide"
+                                        double size = 1
+                                        quatf xformOp:orient = (0.99891806, 0, 0.046505015, 0)
+                                        float3 xformOp:scale = (0.007, 0.0545, 0.09)
+                                        double3 xformOp:translate = (0.015, -0.0245, -0.1)
+                                        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+                                    }
+
+                                    def Xform "left_ankle_roll_pitch_link"
+                                    {
+                                        quatf xformOp:orient = (1, 0, 0, 0)
+                                        float3 xformOp:scale = (1, 1, 1)
+                                        double3 xformOp:translate = (0, 0, -0.2)
+                                        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+
+                                        def Mesh "left_ankle_roll_pitch_visual" (
+                                            prepend references = @./GeometryLibrary.usdc@</Geometry/left_ankle_roll_pitch_visual>
+                                        )
+                                        {
+                                            quatf xformOp:orient = (1, 0, 0, 0)
+                                            float3 xformOp:scale = (1, 1, 1)
+                                            double3 xformOp:translate = (0.0245, -0.0245, 0)
+                                            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+                                        }
+
+                                        def Cube "box"
+                                        {
+                                            float3[] extent = [(-0.5, -0.5, -0.5), (0.5, 0.5, 0.5)]
+                                            uniform token purpose = "guide"
+                                            double size = 1
+                                            quatf xformOp:orient = (1, 0, 0, 0)
+                                            float3 xformOp:scale = (0.08, 0.0335, 0.0645)
+                                            double3 xformOp:translate = (-0.022, -0.0245, 0.0155)
+                                            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+                                        }
+
+                                        def Xform "left_foot_roll_link"
+                                        {
+                                            quatf xformOp:orient = (1, 0, 0, 0)
+                                            float3 xformOp:scale = (1, 1, 1)
+                                            double3 xformOp:translate = (0.0245, -0.02425, 0)
+                                            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+
+                                            def Mesh "left_foot_visual" (
+                                                prepend references = @./GeometryLibrary.usdc@</Geometry/left_foot_visual>
+                                            )
+                                            {
+                                                quatf xformOp:orient = (1, 0, 0, 0)
+                                                float3 xformOp:scale = (1, 1, 1)
+                                                double3 xformOp:translate = (0, 0, 0)
+                                                uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+                                            }
+
+                                            def Mesh "left_foot_visual_1" (
+                                                displayName = "left_foot_visual"
+                                                prepend references = @./GeometryLibrary.usdc@</Geometry/left_foot_visual>
+                                            )
+                                            {
+                                                uniform token purpose = "guide"
+                                                quatf xformOp:orient = (1, 0, 0, 0)
+                                                float3 xformOp:scale = (1, 1, 1)
+                                                double3 xformOp:translate = (0, 0, 0)
+                                                uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+                                            }
+                                        }
+                                    }
+                                }
+
+                                def Xform "left_back_shin_pitch_link"
+                                {
+                                    quatf xformOp:orient = (1, 0, 0, 0)
+                                    float3 xformOp:scale = (1, 1, 1)
+                                    double3 xformOp:translate = (-0.04125, 0, -0.04775)
+                                    uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+
+                                    def Mesh "left_back_shin_visual" (
+                                        prepend references = @./GeometryLibrary.usdc@</Geometry/left_back_shin_visual>
+                                    )
+                                    {
+                                        quatf xformOp:orient = (1, 0, 0, 0)
+                                        float3 xformOp:scale = (1, 1, 1)
+                                        double3 xformOp:translate = (0, 0, 0)
+                                        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+                                    }
+
+                                    def Cube "box"
+                                    {
+                                        float3[] extent = [(-0.5, -0.5, -0.5), (0.5, 0.5, 0.5)]
+                                        uniform token purpose = "guide"
+                                        double size = 1
+                                        quatf xformOp:orient = (0.99891806, 0, 0.046505015, 0)
+                                        float3 xformOp:scale = (0.007, 0.0545, 0.057)
+                                        double3 xformOp:translate = (-0.015, -0.0245, -0.095)
+                                        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+                                    }
+                                }
+                            }
+                        }
+
+                        def Xform "left_back_thigh_pitch_link"
+                        {
+                            quatf xformOp:orient = (1, 0, 0, 0)
+                            float3 xformOp:scale = (1, 1, 1)
+                            double3 xformOp:translate = (-0.06575, 0.0245, 0)
+                            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+
+                            def Mesh "left_back_thigh_visual" (
+                                prepend references = @./GeometryLibrary.usdc@</Geometry/left_back_thigh_visual>
+                            )
+                            {
+                                quatf xformOp:orient = (1, 0, 0, 0)
+                                float3 xformOp:scale = (1, 1, 1)
+                                double3 xformOp:translate = (0, 0, 0)
+                                uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+                            }
+
+                            def Cube "box"
+                            {
+                                float3[] extent = [(-0.5, -0.5, -0.5), (0.5, 0.5, 0.5)]
+                                uniform token purpose = "guide"
+                                double size = 1
+                                quatf xformOp:orient = (0.99891806, 0, -0.046505015, 0)
+                                float3 xformOp:scale = (0.007, 0.0545, 0.057)
+                                double3 xformOp:translate = (-0.015, -0.0245, -0.105)
+                                uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        def Scope "custom"
+        {
+            def Scope "ros2_control"
+            {
+                custom string urdf:name = "Robinion2System"
+                custom string urdf:type = "system"
+
+                def Scope "hardware"
+                {
+                    def Scope "plugin"
+                    {
+                        custom string urdf:text = "mock_components/GenericSystem"
+                    }
+                }
+
+                def Scope "joint"
+                {
+                    custom string urdf:name = "torso_pitch_joint"
+
+                    def Scope "command_interface"
+                    {
+                        custom string urdf:name = "effort"
+                    }
+
+                    def Scope "state_interface"
+                    {
+                        custom string urdf:name = "position"
+                    }
+
+                    def Scope "state_interface_1" (
+                        displayName = "state_interface"
+                    )
+                    {
+                        custom string urdf:name = "velocity"
+                    }
+
+                    def Scope "state_interface_2" (
+                        displayName = "state_interface"
+                    )
+                    {
+                        custom string urdf:name = "effort"
+                    }
+                }
+
+                def Scope "joint_1" (
+                    displayName = "joint"
+                )
+                {
+                    custom string urdf:name = "head_yaw_joint"
+
+                    def Scope "command_interface"
+                    {
+                        custom string urdf:name = "effort"
+                    }
+
+                    def Scope "state_interface"
+                    {
+                        custom string urdf:name = "position"
+                    }
+
+                    def Scope "state_interface_1" (
+                        displayName = "state_interface"
+                    )
+                    {
+                        custom string urdf:name = "velocity"
+                    }
+
+                    def Scope "state_interface_2" (
+                        displayName = "state_interface"
+                    )
+                    {
+                        custom string urdf:name = "effort"
+                    }
+                }
+
+                def Scope "joint_2" (
+                    displayName = "joint"
+                )
+                {
+                    custom string urdf:name = "head_pitch_joint"
+
+                    def Scope "command_interface"
+                    {
+                        custom string urdf:name = "effort"
+                    }
+
+                    def Scope "state_interface"
+                    {
+                        custom string urdf:name = "position"
+                    }
+
+                    def Scope "state_interface_1" (
+                        displayName = "state_interface"
+                    )
+                    {
+                        custom string urdf:name = "velocity"
+                    }
+
+                    def Scope "state_interface_2" (
+                        displayName = "state_interface"
+                    )
+                    {
+                        custom string urdf:name = "effort"
+                    }
+                }
+            }
+        }
+    }
+}
+

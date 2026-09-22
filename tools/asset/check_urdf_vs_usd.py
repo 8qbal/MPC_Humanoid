@@ -14,8 +14,8 @@ The inertia check also reports whether the *inverse* principalAxes would have
 matched, which is the signature of the URDF USD Converter <= 0.1.3 bug.
 
 Usage:
-    uv run python scripts/check_urdf_vs_usd.py assets/robonionv2.usd
-    uv run python scripts/check_urdf_vs_usd.py assets/robonionv2/robinion.usda --urdf path/to.urdf
+    uv run python tools/asset/check_urdf_vs_usd.py assets/robonionv2.usd
+    uv run python tools/asset/check_urdf_vs_usd.py assets/robonionv2/robinion.usda --urdf path/to.urdf
 """
 
 import argparse

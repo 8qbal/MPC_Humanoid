@@ -17,9 +17,6 @@ Commit both `pyproject.toml` files and `uv.lock` so collaborators use the same e
 Replace the placeholders below with a generated task and selected RL library.
 
 ```bash
-# List this project's environments and their available presets
-uv run python scripts/list_envs.py --show_presets
-
 # Exercise an environment without a trained policy
 uv run isaaclab zero_agent --task <TASK_NAME> --num_envs 16
 uv run isaaclab random_agent --task <TASK_NAME> --num_envs 16
@@ -36,7 +33,7 @@ uv run isaaclab benchmark runtime --task <TASK_NAME> --num_envs 16 --num_steps 1
 uv run isaaclab benchmark training --rl_library <RL_LIBRARY> --task <TASK_NAME> --max_iterations 10
 ```
 
-Use `physics=<PRESET>` to select one of the presets shown by `list_envs.py`.
+Use `physics=<PRESET>` to select one of the physics presets defined per task.
 
 ## Development
 

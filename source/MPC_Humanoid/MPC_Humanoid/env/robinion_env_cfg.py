@@ -3,15 +3,10 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Placeholder manager-based env for the Robinion MPC controller.
-
-Not a gym-registered RL task: the MPC controller (``mpc.controller.MpcHumanoidController``)
-will read observations from and write actions into this env's managers directly, rather
-than through a reward/termination loop, so this stays a plain ``ManagerBasedEnvCfg``
-(not ``ManagerBasedRLEnvCfg``). The action/observation terms below are placeholders --
-a straight joint-effort passthrough and raw joint/base state -- to be replaced once the
-MPC controller and its state adapter (``mpc.state``, not yet implemented) exist; contact
-sensors and the model spec are also added in later phases.
+"""
+Manager-based env for the Robinion MPC controller.
+The controller reads observations from and writes actions into this env's managers directly,
+so it is a plain ``ManagerBasedEnvCfg`` (no reward/termination managers).
 """
 
 from __future__ import annotations
@@ -20,10 +15,14 @@ import isaaclab.envs.mdp as mdp
 import isaaclab.sim as sim_utils
 from isaaclab.assets import ArticulationCfg, AssetBaseCfg
 from isaaclab.envs import ManagerBasedEnvCfg
+from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
 from isaaclab.managers import ObservationTermCfg as ObsTerm
+from isaaclab.managers import SceneEntityCfg
 from isaaclab.scene import InteractiveSceneCfg
+from isaaclab.sensors import ImuCfg
 from isaaclab.utils.configclass import configclass
+from isaaclab_physx.physics import PhysxCfg
 
 from ..robots.robonionv2 import ROBINION_CFG
 
@@ -51,20 +50,32 @@ _ACTUATED_JOINTS = [
 class MpcHumanoidRobinionSceneCfg(InteractiveSceneCfg):
     """Flat-ground scene holding a single Robinion robot."""
 
-    # Ground plane.
+    # Procedural static slab (top face at z = 0) instead of GroundPlaneCfg, whose USD lives on
+    # Nucleus and is not available offline.
     ground = AssetBaseCfg(
         prim_path="/World/ground",
-        spawn=sim_utils.GroundPlaneCfg(size=(100.0, 100.0)),
+        spawn=sim_utils.CuboidCfg(
+            size=(100.0, 100.0, 0.1),
+            collision_props=sim_utils.CollisionPropertiesCfg(),
+            physics_material=sim_utils.RigidBodyMaterialCfg(static_friction=1.0, dynamic_friction=1.0, restitution=0.0),
+            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.3, 0.3, 0.3)),
+        ),
+        init_state=AssetBaseCfg.InitialStateCfg(pos=(0.0, 0.0, -0.05)),
     )
 
-    # Robot.
     robot: ArticulationCfg = ROBINION_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
 
-    # Lights.
+    # MPU6050-class IMU on the real robot (raw gyro + accel, no fused orientation), mounted at
+    # the URDF imu_link frame on upper_body_link, axes aligned with that link.
+    imu = ImuCfg(prim_path="{ENV_REGEX_NS}/Robot/.*/upper_body_link/imu_link", update_period=0.0)
+
     dome_light = AssetBaseCfg(
         prim_path="/World/DomeLight",
         spawn=sim_utils.DomeLightCfg(color=(0.9, 0.9, 0.9), intensity=500.0),
     )
+
+
+# MDP settings.
 
 
 @configclass
@@ -74,12 +85,16 @@ class ActionsCfg:
 
 @configclass
 class ObservationsCfg:
-    """Observation specifications for the MDP."""
-
     @configclass
     class StateCfg(ObsGroup):
-        """Observations for the MPC controller."""
+        """Raw state for the MPC controller (no noise, no clipping).
 
+        ``imu_*`` and joint terms are what the hardware can also measure; ``base_*`` are sim
+        ground truth for validation.
+        """
+
+        imu_ang_vel = ObsTerm(func=mdp.imu_ang_vel, params={"asset_cfg": SceneEntityCfg("imu")})
+        imu_lin_acc = ObsTerm(func=mdp.imu_lin_acc, params={"asset_cfg": SceneEntityCfg("imu")})
         base_lin_vel = ObsTerm(func=mdp.base_lin_vel)
         base_ang_vel = ObsTerm(func=mdp.base_ang_vel)
         projected_gravity = ObsTerm(func=mdp.projected_gravity)
@@ -93,23 +108,37 @@ class ObservationsCfg:
     state: StateCfg = StateCfg()
 
 
+@configclass
+class EventsCfg:
+    # Also reset the actuator PD targets, otherwise they stay at zero and pull the legs
+    # out of the crouch as soon as the sim starts.
+    reset_scene = EventTerm(func=mdp.reset_scene_to_default, mode="reset", params={"reset_joint_targets": True})
+
+
 # Environment configuration.
 
 
 @configclass
 class MpcHumanoidRobinionEnvCfg(ManagerBasedEnvCfg):
-    """Placeholder manager-based environment configuration for the Robinion MPC controller."""
+    """Single-robot, flat-ground, deterministic PhysX environment for the Robinion MPC controller."""
 
-    # Scene settings.
     scene: MpcHumanoidRobinionSceneCfg = MpcHumanoidRobinionSceneCfg(num_envs=1, env_spacing=4.0)
-    # Basic settings.
     observations: ObservationsCfg = ObservationsCfg()
     actions: ActionsCfg = ActionsCfg()
+    events: EventsCfg = EventsCfg()
 
     def __post_init__(self) -> None:
-        """Post initialization."""
-        # General settings.
-        self.decimation = 2
-        # Simulation settings.
-        self.sim.dt = 1 / 120
+        self.seed = 0
+        # 1 kHz physics is required by the explicit DCMotorCfg damping (see robots/robonionv2.py);
+        # 5x decimation gives a 200 Hz control step.
+        self.decimation = 5
+        self.sim.dt = 1.0 / 1000.0
         self.sim.render_interval = self.decimation
+        # The loop-closure joints (spherical, excludeFromArticulation) and the PhysX-specific
+        # articulation props in ROBINION_CFG were validated on PhysX only (diagnosed with a drop test, since removed).
+        self.sim.physics = PhysxCfg(
+            solver_type=1,
+            enable_enhanced_determinism=True,
+            enable_stabilization=True,
+            bounce_threshold_velocity=0.2,
+        )

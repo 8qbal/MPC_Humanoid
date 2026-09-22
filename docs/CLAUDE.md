@@ -35,7 +35,6 @@ matches the robot's URDF/CAD exactly.
 ## Commands
 
 ```bash
-uv run python scripts/list_envs.py --show_presets            # list envs/presets
 uv run isaaclab zero_agent --task <TASK_NAME> --num_envs 16   # sanity-check an env, no policy
 uv run isaaclab random_agent --task <TASK_NAME> --num_envs 16
 uv run isaaclab train --rl_library <RL_LIBRARY> --task <TASK_NAME>
@@ -44,11 +43,11 @@ uv run isaaclab train_multigpu --rl_library <RL_LIBRARY> --task <TASK_NAME> --nu
 uv run isaaclab benchmark runtime --task <TASK_NAME> --num_envs 16 --num_steps 1000
 uv run isaaclab benchmark training --rl_library <RL_LIBRARY> --task <TASK_NAME> --max_iterations 10
 uv run pre-commit run --all-files                              # lint/format (ruff, codespell, etc.)
+uv run python scripts/run_env.py --viz kit                    # load the Robinion MPC env and play it (headless without --viz)
 ```
 
-`physics=<PRESET>` selects one of the physics presets shown by `list_envs.py` (e.g.
-the `MpcHumanoidPhysicsCfg` presets defined per task, such as `newton_mjwarp` /
-`newton_kamino` / `physx`).
+`physics=<PRESET>` selects one of the physics presets defined per task (e.g. the
+`MpcHumanoidPhysicsCfg` presets such as `newton_mjwarp` / `newton_kamino` / `physx`).
 
 Linting: `ruff` (line length 120, `E,F,I,UP,W`) + `ruff-format` + `codespell`, run
 via pre-commit. Match existing code style (docstrings, type hints, `from __future__
@@ -78,7 +77,8 @@ indexing uses too much memory, remove unused simulator extension paths from
 source/MPC_Humanoid/MPC_Humanoid/   installable package: robot config, env, mpc, RL tasks
 assets/                             USD assets actually loaded by ArticulationCfg
 references/                         URDF, CAD-derived docs, git submodules (IK, RL refs)
-scripts/                            standalone utilities (not part of the package)
+scripts/                            run_env.py: load + play the env (not part of the package)
+tools/asset/                        URDF -> USD pipeline scripts (fix, flatten, check)
 outputs/                            scratch / generated output, not source of truth
 plan.md                             phased plan for the MPC controller (read before Phase work)
 ```
@@ -130,11 +130,9 @@ hand-edit `assets/robonionv2.usd` without reading it first.
 ```bash
 uv run urdf_usd_converter references/robinion_description/robinion2.urdf assets/robonionv2 \
     -p robinion_description=$PWD/references/robinion_description   # 1. URDF -> raw USD
-uv run python scripts/fix_robinion_usd.py assets/robonionv2/robinion.usda  # 2. hand-made physics fixes
-uv run python scripts/flatten_usd.py assets/robonionv2/robinion.usda assets/robonionv2.usd  # 3. standalone asset
-uv run python scripts/check_urdf_vs_usd.py assets/robonionv2.usd            # 4. verify against URDF+STL
-uv run python scripts/drop_test.py                                          # 5. headless drop test (venv engine)
-/home/tkuai/isaacsim/python.sh scripts/drop_test.py --dt 0.0166667          # 5b. same, on the GUI's Isaac Sim 6.0.1 engine
+uv run python tools/asset/fix_robinion_usd.py assets/robonionv2/robinion.usda  # 2. hand-made physics fixes
+uv run python tools/asset/flatten_usd.py assets/robonionv2/robinion.usda assets/robonionv2.usd  # 3. standalone asset
+uv run python tools/asset/check_urdf_vs_usd.py assets/robonionv2.usd            # 4. verify against URDF+STL
 ```
 
 Rules when working on this pipeline:
@@ -144,10 +142,10 @@ Rules when working on this pipeline:
 - `assets/robonionv2.usd` is a generated, flattened artifact — regenerate it with
   `flatten_usd.py`, don't edit it directly.
 - After *any* change to the URDF, the converter fixes, or the asset, run
-  `scripts/check_urdf_vs_usd.py` and compare the SUMMARY against the expected one
+  `tools/asset/check_urdf_vs_usd.py` and compare the SUMMARY against the expected one
   documented in `joint_info.md`. New/changed ERR or WARN lines mean something
   regressed — do not silently accept them.
-- `scripts/fix_robinion_usd.py` is idempotent (safe to re-run on a file already
+- `tools/asset/fix_robinion_usd.py` is idempotent (safe to re-run on a file already
   partly edited by hand in the Isaac Sim GUI).
 
 ## When editing robot/task config

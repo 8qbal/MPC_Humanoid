@@ -1,6 +1,6 @@
 # Robinion — Joint & Link Reference
 
-Reference sheet for building the Robinion `ArticulationCfg` in `source/MPC_Humanoid`. 
+Reference sheet for building the Robinion `ArticulationCfg` in `source/MPC_Humanoid`.
 
 ## Sources
 
@@ -8,7 +8,7 @@ Reference sheet for building the Robinion `ArticulationCfg` in `source/MPC_Human
 |---|---|
 | `references/robinion_description/robinion2.urdf` | Generated URDF (from `urdf/robinion2.xacro` + `body/head/left_arm/right_arm/left_leg/right_leg.xacro`). **Primary source for all numbers below.** |
 | `assets/robonionv2/` | Raw output of `urdf_usd_converter` (converter version pinned in `robinion.usda`'s `customLayerData.creator`), *before* the hand-authored fixes below: `robinion.usda` (thin root, payloads `Payload/Contents.usda`) + `Payload/{Geometry,Physics,Contents}.usda` + `Payload/GeometryLibrary.usdc` (meshes). Plain tree import: no loop closure, no articulation self-collision override, base welded to the world. Kept as an editable, re-buildable source — do not hand-edit `Payload/`, only `robinion.usda`. |
-| `assets/robonionv2.usd` | **The asset actually loaded by `ArticulationCfg`.** Flattened, standalone (`scripts/flatten_usd.py`) copy of `assets/robonionv2/robinion.usda` after the 5 fixes in *USD verification* below: loop-closure joints, self-collision off, floating base, foot inertia, `left_back_thigh_pitch_link` mass. Regenerate it whenever `robonionv2/robinion.usda` changes — never edit it directly. |
+| `assets/robonionv2.usd` | **The asset actually loaded by `ArticulationCfg`.** Flattened, standalone (`tools/asset/flatten_usd.py`) copy of `assets/robonionv2/robinion.usda` after the 5 fixes in *USD verification* below: loop-closure joints, self-collision off, floating base, foot inertia, `left_back_thigh_pitch_link` mass. Regenerate it whenever `robonionv2/robinion.usda` changes — never edit it directly. |
 | `references/Robinion_InverseKinematic/robinion_description/` | Second copy of the description with a mirrored `leg.xacro` (different axis signs) and `ik_controller_fullbody.py`. The IK script is the only document that states the **parallelogram coupling** between joints (see *Leg mechanism*). |
 
 Notes:
@@ -112,13 +112,13 @@ Each leg is a two-stage parallelogram (four-bar) linkage. The URDF can only expr
 | Thigh | `*_hip_roll_pitch_link` | `*_front_thigh_pitch_link` (pivot x = −0.0245) and `*_back_thigh_pitch_link` (pivot x = −0.06575) | `*_knee_pitch_link` | 0.04125 m |
 | Shin | `*_knee_pitch_link` | `*_front_shin_pitch_link` (pivot x = 0, z = −0.04775) and `*_back_shin_pitch_link` (pivot x = −0.04125, z = −0.04775) | `*_ankle_roll_pitch_link` | 0.04125 m |
 
-Loop-closure joints (absent from the URDF; **authored by `scripts/fix_robinion_usd.py`, present in `assets/robonionv2.usd`** as `PhysicsSphericalJoint` with `excludeFromArticulation = 1`):
+Loop-closure joints (absent from the URDF; **authored by `tools/asset/fix_robinion_usd.py`, present in `assets/robonionv2.usd`** as `PhysicsSphericalJoint` with `excludeFromArticulation = 1`):
 - `*_back_thigh_loop_joint`: `*_back_thigh_pitch_link` @ (0, 0, −0.2) ↔ `*_knee_pitch_link` @ (−0.04125, 0, 0).
 - `*_back_shin_loop_joint`: `*_back_shin_pitch_link` @ (0, 0, −0.2) ↔ `*_ankle_roll_pitch_link` @ (−0.04125, 0, 0).
 
 Verified numerically: at q = 0 both anchor points of each loop joint coincide in world space (gap 0.000 mm) and the axes are parallel.
 
-**Why spherical, not revolute.** The three tree joints of each stage are already parallel revolutes, so the closure only needs to pin one point (3 constraints). A revolute closure adds 5 and leaves the planar 4-bar over-constrained by 3 (Grübler in 3D: 6·3 − 4·5 = −2). The closure was originally authored as a revolute; that is stable on omni.physx 110.3.x (this venv's Isaac Sim 6.1.0) but on **omni.physx 110.1.13 (the Isaac Sim 6.0.1 GUI install at `/home/tkuai/isaacsim`) it makes the whole articulation explode to ~1e14 m on first ground contact** (`Invalid PhysX transform detected` on every link, robot vanishes). Reproduced and fixed headlessly with `scripts/drop_test.py`: same asset, same scene, revolute closure → explodes at t ≈ 0.6 s on 110.1.13; spherical closure → stable on both builds, anchor gaps ≤ 0.3 mm after the robot collapses onto the ground. Raising solver iterations, disabling self-collision, timestep, GPU vs CPU dynamics and spawn height made no difference — only the joint type did.
+**Why spherical, not revolute.** The three tree joints of each stage are already parallel revolutes, so the closure only needs to pin one point (3 constraints). A revolute closure adds 5 and leaves the planar 4-bar over-constrained by 3 (Grübler in 3D: 6·3 − 4·5 = −2). The closure was originally authored as a revolute; that is stable on omni.physx 110.3.x (this venv's Isaac Sim 6.1.0) but on **omni.physx 110.1.13 (the Isaac Sim 6.0.1 GUI install at `/home/tkuai/isaacsim`) it makes the whole articulation explode to ~1e14 m on first ground contact** (`Invalid PhysX transform detected` on every link, robot vanishes). Reproduced and fixed headlessly with `drop_test.py` (removed, see git history): same asset, same scene, revolute closure → explodes at t ≈ 0.6 s on 110.1.13; spherical closure → stable on both builds, anchor gaps ≤ 0.3 mm after the robot collapses onto the ground. Raising solver iterations, disabling self-collision, timestep, GPU vs CPU dynamics and spawn height made no difference — only the joint type did.
 
 Because both stages are parallelograms, the coupler links **never rotate relative to their ground link**. `ik_controller_fullbody.py` (lines 204-224) publishes the mimic relation for all four passive joints, but the *direction of actuation* it implies (front_thigh and front_shin driven, ankle_pitch passive) is superseded by the user's direct confirmation of the real hardware: each leg has exactly 5 motors -- hip yaw, hip roll, hip pitch (`front_thigh_pitch_joint`), ankle pitch (`ankle_pitch_joint`), ankle roll -- all Dynamixel XH540-W270. The thigh parallelogram is driven from its **proximal** end (hip pitch motor on `front_thigh_pitch_joint`); the shin parallelogram is driven from its **distal** end (ankle pitch motor on `ankle_pitch_joint`), not from the knee end via `front_shin_pitch_joint`. This is the assignment implemented in `robots/robonionv2.py` and `env/robinion_env_cfg.py` (`ankle_pitch` actuated, `front_shin_pitch` passive) -- do not revert it to the IK script's implied direction without re-confirming with the user.
 
@@ -277,22 +277,18 @@ uv run urdf_usd_converter \
 
 # 2. Author the 5 hand-made physics fixes into assets/robonionv2/robinion.usda
 #    (idempotent: safe to re-run, e.g. after further GUI edits)
-uv run python scripts/fix_robinion_usd.py assets/robonionv2/robinion.usda
+uv run python tools/asset/fix_robinion_usd.py assets/robonionv2/robinion.usda
 
 # 3. Flatten into the standalone asset ArticulationCfg actually loads
-uv run python scripts/flatten_usd.py assets/robonionv2/robinion.usda assets/robonionv2.usd
+uv run python tools/asset/flatten_usd.py assets/robonionv2/robinion.usda assets/robonionv2.usd
 
 # 4. Verify: URDF + STL meshes vs. the final USD, link by link and joint by joint
-uv run python scripts/check_urdf_vs_usd.py assets/robonionv2.usd
+uv run python tools/asset/check_urdf_vs_usd.py assets/robonionv2.usd
 
-# 5. Dynamic sanity check: drop the undriven robot on a ground plane headlessly and
-#    make sure the articulation does not explode and the loop closures hold.
-#    Run it on BOTH engines -- they ship different PhysX builds (see below):
-uv run python scripts/drop_test.py                                  # venv Isaac Sim 6.1.0 / physx 110.3.x, 200 Hz
-/home/tkuai/isaacsim/python.sh scripts/drop_test.py --dt 0.0166667  # GUI  Isaac Sim 6.0.1 / physx 110.1.13, 60 Hz
+# 5. Dynamic sanity check: load the env and let the robot stand (scripts/run_env.py).
 ```
 
-Step 5 exists because the two installs behave differently: the revolute loop closure that 110.3.x tolerates makes 110.1.13 explode on ground contact (see *Leg mechanism*). `drop_test.py` has `--no-loop-joints` / `--spherical-loops` / `--gpu` / `--open-direct` / `--height` switches for isolating this kind of issue without going through the GUI; it exits non-zero on an explosion and prints the loop-anchor gaps after landing.
+The two installs ship different PhysX builds: the revolute loop closure that 110.3.x tolerates makes 110.1.13 explode on ground contact (see *Leg mechanism*). This was diagnosed with a standalone drop test (`scripts/drop_test.py`, since removed — see git history) that dropped the undriven robot on both engines; the spherical closure now in the asset is stable on both.
 
 `assets/robonionv2/robinion.usda` can also be opened and edited in the Isaac Sim GUI (fixes 1–5 can be done by hand there instead of step 2 — see the fix descriptions below for the exact values); re-run steps 3–4 afterwards. Never hand-edit `assets/robonionv2/Payload/*.usda` — that is pure converter output, kept unmodified so a diff of `robinion.usda` against a fresh conversion shows exactly what was added by hand.
 
@@ -306,7 +302,7 @@ The URDF only expresses a *tree*, so `urdf_usd_converter` cannot produce these o
 4. **Negative inertia fix**: URDF gives `*_foot_roll_link` `izz = -2.3e-5`, a negative principal moment (invalid). PhysX requires every principal moment to be strictly `> 0` for an articulation link, so clamping to `0` is rejected too (`PxRigidBody::setMassSpaceInertiaTensor(): components must be > 0 for articulations`). `fix_robinion_usd.py` scans every prim with `physics:diagonalInertia` and replaces any non-positive component with `NEGATIVE_INERTIA_REPLACEMENT = 5.0e-4` (also in `newton:inertia`), leaving the other moments, CoM and principal axes untouched: `diagonalInertia = (5.0e-4, 8.098e-5, 5.570e-4)`. `5.0e-4` comes from the triangle inequality every rigid body's principal moments must satisfy (`|Ixx-Iyy| <= Izz <= Ixx+Iyy`, giving `[4.76e-4, 6.38e-4]` here) cross-checked against a uniform-box estimate from the foot mesh's bounding box (`~6.70e-4`); see the script for the derivation. The inertia is deliberately *not* recomputed from the STL.
 5. **`left_back_thigh_pitch_link` mass** 0.078 → 0.06 kg, to match `right_back_thigh_pitch_link` (URDF asymmetry, presumed typo — see *Defects* item 2).
 
-`scripts/fix_robinion_usd.py` implements all 5; pass `--no-mass-fix` to skip #5 if you'd rather leave the asymmetry in place.
+`tools/asset/fix_robinion_usd.py` implements all 5; pass `--no-mass-fix` to skip #5 if you'd rather leave the asymmetry in place.
 
 ### Historical bug (converter ≤ 0.1.3, no longer relevant to the current pipeline)
 
@@ -314,7 +310,7 @@ An earlier version of this asset was built via the Isaac Sim Full 6.0.1 GUI impo
 
 ### Verification method
 
-`scripts/check_urdf_vs_usd.py` parses the URDF and all 31 STL meshes, locates the matching USD prim for every link/joint, and compares: local transform vs. joint `<origin>`; mass and CoM; full inertia tensor (reconstructed as `R·diag·Rᵀ` from `principalAxes`/`diagonalInertia`, flagged separately if the *inverse* rotation would have matched — the v0.1.3 bug signature); visual mesh (triangle count, bounding box, surface area, area-weighted centroid, origin) against the STL; collision shapes; joint type/body0/body1/frame/axis-with-sign/limits/effort/velocity/damping (reading both the pre-0.3 PhysX-drive attributes and the 0.3.x `urdf:limit:effort`/`newton:*` attributes, whichever the converter in use wrote); and a forward-kinematics check that loop-joint anchors coincide at the zero pose.
+`tools/asset/check_urdf_vs_usd.py` parses the URDF and all 31 STL meshes, locates the matching USD prim for every link/joint, and compares: local transform vs. joint `<origin>`; mass and CoM; full inertia tensor (reconstructed as `R·diag·Rᵀ` from `principalAxes`/`diagonalInertia`, flagged separately if the *inverse* rotation would have matched — the v0.1.3 bug signature); visual mesh (triangle count, bounding box, surface area, area-weighted centroid, origin) against the STL; collision shapes; joint type/body0/body1/frame/axis-with-sign/limits/effort/velocity/damping (reading both the pre-0.3 PhysX-drive attributes and the 0.3.x `urdf:limit:effort`/`newton:*` attributes, whichever the converter in use wrote); and a forward-kinematics check that loop-joint anchors coincide at the zero pose.
 
 Expected `assets/robonionv2.usd` SUMMARY — anything beyond this list means an authored value drifted from the URDF or a fix regressed:
 
@@ -360,4 +356,3 @@ First-principles conversion to an Isaac Lab PD actuator (12 V, default P gain, n
 - Reflected rotor inertia (armature) for a 272.5:1 coreless motor is expected in the 1e-3 to 5e-3 kg·m² range; treat as a tunable to be identified, not a datasheet value.
 
 These numbers change with supply voltage and with the P/I/D gains actually programmed into the servos — both must be read from the real robot.
-

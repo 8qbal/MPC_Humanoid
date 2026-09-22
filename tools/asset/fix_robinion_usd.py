@@ -22,8 +22,8 @@ The script is idempotent: every fix checks the current state first, so it can
 be run on a fresh conversion or on a file already partly edited in the GUI.
 
 Usage:
-    uv run python scripts/fix_robinion_usd.py assets/robonionv2/robinion.usda
-    uv run python scripts/fix_robinion_usd.py assets/robonionv2/robinion.usda --no-mass-fix
+    uv run python tools/asset/fix_robinion_usd.py assets/robonionv2/robinion.usda
+    uv run python tools/asset/fix_robinion_usd.py assets/robonionv2/robinion.usda --no-mass-fix
 """
 
 import argparse
@@ -93,7 +93,7 @@ def fix_loop_joints(stage):
     # 110.1.x (Isaac Sim 6.0.1, the GUI install) a revolute closure makes the
     # whole articulation explode to ~1e14 m on first ground contact, while the
     # spherical closure is stable on both 110.1.x and 110.3.x (see
-    # scripts/drop_test.py). NVIDIA's own loop-closure examples use spherical
+    # a standalone drop test, since removed). NVIDIA's own loop-closure examples use spherical
     # or D6 joints for the same reason.
     for name, (body0_rel, body1_rel) in LOOP_JOINTS.items():
         body0, body1 = f"{PELVIS}/{body0_rel}", f"{PELVIS}/{body1_rel}"

@@ -14,7 +14,7 @@ render settings, and any environment prim (e.g. a grid floor) that happened to
 be loaded in the GUI when the file was saved.
 
 Usage:
-    uv run python scripts/flatten_usd.py assets/robonionv2/robinion.usda assets/robonionv2.usd
+    uv run python tools/asset/flatten_usd.py assets/robonionv2/robinion.usda assets/robonionv2.usd
 """
 
 import argparse

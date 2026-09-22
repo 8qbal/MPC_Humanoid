@@ -1,4 +1,4 @@
-"""Robinion v2 humanoid: 21x Dynamixel MX-106 + 2x AX-12A (head), parallelogram legs, 11.1 V bus."""
+"""Robinion TKU humanoid: 21x Dynamixel XH540-W270 + 2x XH430-W350 (head), parallelogram legs, 11.1 V bus."""
 
 from __future__ import annotations
 
@@ -11,22 +11,21 @@ from isaaclab.assets import ArticulationCfg
 MPC_HUMANOID_ASSETS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../assets"))
 
 
-# Datasheet values at the 11.1 V 
-MX106_STALL_TORQUE = 8.0  # N·m
-MX106_NO_LOAD_SPEED = 4.29  # rad/s (41 rpm)
-AX12A_STALL_TORQUE = 1.39  # N·m
-AX12A_NO_LOAD_SPEED = 5.72  # rad/s (54.6 rpm)
+# Motor parameters follow references/robinion_description/robinion2.urdf, which is authoritative for
+URDF_LIMITS = {  # group: (effort [N·m], velocity [rad/s])
+    "yaw": (4.1, 4.82),          # hip yaw, elbow yaw, head
+    "torso_arms": (10.6, 3.14),  # torso pitch, shoulder pitch/roll, elbow pitch
+    "legs": (9.9, 4.08),         # hip roll, ankle pitch/roll, left front thigh
+    "right_thigh": (19.8, 4.08),
+}
+URDF_DAMPING = 0.1  # N·m·s/rad, <dynamics damping> on every joint
+URDF_FRICTION = 0.0  # N·m, <dynamics friction> on every joint
 
-# Servo pos mode param
-# TODO: must do some check again
-MX106_STIFFNESS = 40.0  # N·m/rad, default P gain 850, 4096 ticks/rev, PWM full scale 885
-MX106_DAMPING = 1.9  # N·m·s/rad
-AX12A_STIFFNESS = 8.0  # N·m/rad, default compliance slope 32 over 1024 ticks/300 deg
-AX12A_DAMPING = 0.24  # N·m·s/rad
-
-# Reflected rotor inertia (J_rotor * gear_ratio^2); rotor inertia is not published, these are estimates.
-MX106_ARMATURE = 0.02
-AX12A_ARMATURE = 0.002
+# Values not defined in the URDF come from the servo datasheets.
+XH540_STIFFNESS = 42.0  # N·m/rad
+XH430_STIFFNESS = 16.6  # N·m/rad
+XH540_ARMATURE = 0.003
+XH430_ARMATURE = 0.002
 
 # Standing crouch of the parallelogram legs: the knee/shin follow the driven thigh/ankle by geometry.
 _LEG_CROUCH = 0.1  # rad
@@ -73,52 +72,85 @@ ROBINION_CFG = ArticulationCfg(
     ),
     soft_joint_pos_limit_factor=0.9,
     actuators={
-        "legs": DCMotorCfg(
+        "yaw": DCMotorCfg(
             joint_names_expr=[
                 ".*_hip_yaw_joint",
-                ".*_hip_roll_joint",
-                ".*_front_thigh_pitch_joint",
-                ".*_ankle_pitch_joint",
-                ".*_ankle_roll_joint",
+                ".*_elbow_yaw_joint",
             ],
-            saturation_effort=MX106_STALL_TORQUE,
-            actuator_effort_limit=MX106_STALL_TORQUE,
-            actuator_velocity_limit=MX106_NO_LOAD_SPEED,
-            joint_effort_limit=MX106_STALL_TORQUE,
-            joint_velocity_limit=MX106_NO_LOAD_SPEED,
-            stiffness=MX106_STIFFNESS,
-            damping=MX106_DAMPING,
-            armature=MX106_ARMATURE,
+            saturation_effort=URDF_LIMITS["yaw"][0],
+            actuator_effort_limit=URDF_LIMITS["yaw"][0],
+            actuator_velocity_limit=URDF_LIMITS["yaw"][1],
+            joint_effort_limit=URDF_LIMITS["yaw"][0],
+            joint_velocity_limit=URDF_LIMITS["yaw"][1],
+            stiffness=XH540_STIFFNESS,
+            damping=URDF_DAMPING,
+            friction=URDF_FRICTION,
+            armature=XH540_ARMATURE,
         ),
         "torso_arms": DCMotorCfg(
             joint_names_expr=[
                 "torso_pitch_joint",
                 ".*_shoulder_pitch_joint",
                 ".*_shoulder_roll_joint",
-                ".*_elbow_yaw_joint",
                 ".*_elbow_pitch_joint",
             ],
-            saturation_effort=MX106_STALL_TORQUE,
-            actuator_effort_limit=MX106_STALL_TORQUE,
-            actuator_velocity_limit=MX106_NO_LOAD_SPEED,
-            joint_effort_limit=MX106_STALL_TORQUE,
-            joint_velocity_limit=MX106_NO_LOAD_SPEED,
-            stiffness=MX106_STIFFNESS,
-            damping=MX106_DAMPING,
-            armature=MX106_ARMATURE,
+            saturation_effort=URDF_LIMITS["torso_arms"][0],
+            actuator_effort_limit=URDF_LIMITS["torso_arms"][0],
+            actuator_velocity_limit=URDF_LIMITS["torso_arms"][1],
+            joint_effort_limit=URDF_LIMITS["torso_arms"][0],
+            joint_velocity_limit=URDF_LIMITS["torso_arms"][1],
+            stiffness=XH540_STIFFNESS,
+            damping=URDF_DAMPING,
+            friction=URDF_FRICTION,
+            armature=XH540_ARMATURE,
+        ),
+        "legs": DCMotorCfg(
+            joint_names_expr=[
+                ".*_hip_roll_joint",
+                "left_front_thigh_pitch_joint",
+                ".*_ankle_pitch_joint",
+                ".*_ankle_roll_joint",
+            ],
+            saturation_effort=URDF_LIMITS["legs"][0],
+            actuator_effort_limit=URDF_LIMITS["legs"][0],
+            actuator_velocity_limit=URDF_LIMITS["legs"][1],
+            joint_effort_limit=URDF_LIMITS["legs"][0],
+            joint_velocity_limit=URDF_LIMITS["legs"][1],
+            stiffness=XH540_STIFFNESS,
+            damping=URDF_DAMPING,
+            friction=URDF_FRICTION,
+            armature=XH540_ARMATURE,
+        ),
+        "right_thigh": DCMotorCfg(
+            joint_names_expr=[
+                "right_front_thigh_pitch_joint",
+            ],
+            saturation_effort=URDF_LIMITS["right_thigh"][0],
+            actuator_effort_limit=URDF_LIMITS["right_thigh"][0],
+            actuator_velocity_limit=URDF_LIMITS["right_thigh"][1],
+            joint_effort_limit=URDF_LIMITS["right_thigh"][0],
+            joint_velocity_limit=URDF_LIMITS["right_thigh"][1],
+            stiffness=XH540_STIFFNESS,
+            damping=URDF_DAMPING,
+            friction=URDF_FRICTION,
+            armature=XH540_ARMATURE,
         ),
         "head": DCMotorCfg(
-            joint_names_expr=["head_yaw_joint", "head_pitch_joint"],
-            saturation_effort=AX12A_STALL_TORQUE,
-            actuator_effort_limit=AX12A_STALL_TORQUE,
-            actuator_velocity_limit=AX12A_NO_LOAD_SPEED,
-            joint_effort_limit=AX12A_STALL_TORQUE,
-            joint_velocity_limit=AX12A_NO_LOAD_SPEED,
-            stiffness=AX12A_STIFFNESS,
-            damping=AX12A_DAMPING,
-            armature=AX12A_ARMATURE,
+            joint_names_expr=[
+                "head_yaw_joint",
+                "head_pitch_joint",
+            ],
+            saturation_effort=URDF_LIMITS["yaw"][0],
+            actuator_effort_limit=URDF_LIMITS["yaw"][0],
+            actuator_velocity_limit=URDF_LIMITS["yaw"][1],
+            joint_effort_limit=URDF_LIMITS["yaw"][0],
+            joint_velocity_limit=URDF_LIMITS["yaw"][1],
+            stiffness=XH430_STIFFNESS,
+            damping=URDF_DAMPING,
+            friction=URDF_FRICTION,
+            armature=XH430_ARMATURE,
         ),
-        # 4 bar linkage on the knee
+        # Passive joints in the knee four-bar linkage.
         "passive": ImplicitActuatorCfg(
             joint_names_expr=[
                 ".*_knee_pitch_joint",

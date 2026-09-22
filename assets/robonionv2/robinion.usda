@@ -70,12 +70,22 @@ def Xform "robinion" (
                             {
                                 over "right_front_shin_pitch_link"
                                 {
-                                    over "right_ankle_roll_pitch_link"
+                                    over "right_ankle_roll_pitch_link" (
+                                        customData = {
+                                            string com_source = "URDF inertial origin (-0.04483899846673012, -0.0003110000106971711, 0.015111000277101994) + visual mesh offset (0.02449999935925007, -0.02449999935925007, 0.0) (URDF forgot to move the mesh-centroid CoM into the link frame; see ANKLE_COM_OFFSET in this script)"
+                                        }
+                                    )
                                     {
-                                        over "right_foot_roll_link"
+                                        point3f physics:centerOfMass = (-0.020339, -0.024811, 0.015111)
+
+                                        over "right_foot_roll_link" (
+                                            customData = {
+                                                string inertia_source = "URDF value, negative moment replaced with 0.0005 (was (0.0, 8.098109537968412e-05, 0.0005570206558331847); see NEGATIVE_INERTIA_REPLACEMENT derivation in this script)"
+                                            }
+                                        )
                                         {
-                                            float3 physics:diagonalInertia = (0.00008079, 0.0005547, 0.0005773)
-                                            quatf physics:principalAxes = (1, 0, 0, 0)
+                                            double[] newton:inertia = [0.000557, 0.000081, 0.0005, 0.000003, 0.000001, 0]
+                                            float3 physics:diagonalInertia = (0.0005, 0.000080981095, 0.00055702066)
                                         }
                                     }
                                 }
@@ -111,12 +121,22 @@ def Xform "robinion" (
 
                                 over "left_front_shin_pitch_link"
                                 {
-                                    over "left_ankle_roll_pitch_link"
+                                    over "left_ankle_roll_pitch_link" (
+                                        customData = {
+                                            string com_source = "URDF inertial origin (-0.04483899846673012, -0.0003110000106971711, 0.015111000277101994) + visual mesh offset (0.02449999935925007, -0.02449999935925007, 0.0) (URDF forgot to move the mesh-centroid CoM into the link frame; see ANKLE_COM_OFFSET in this script)"
+                                        }
+                                    )
                                     {
-                                        over "left_foot_roll_link"
+                                        point3f physics:centerOfMass = (-0.020339, -0.024811, 0.015111)
+
+                                        over "left_foot_roll_link" (
+                                            customData = {
+                                                string inertia_source = "URDF value, negative moment replaced with 0.0005 (was (0.0, 8.098109537968412e-05, 0.0005570206558331847); see NEGATIVE_INERTIA_REPLACEMENT derivation in this script)"
+                                            }
+                                        )
                                         {
-                                            float3 physics:diagonalInertia = (0.00008079, 0.0005547, 0.0005773)
-                                            quatf physics:principalAxes = (1, 0, 0, 0)
+                                            double[] newton:inertia = [0.000557, 0.000081, 0.0005, 0.000003, 0.000001, 0]
+                                            float3 physics:diagonalInertia = (0.0005, 0.000080981095, 0.00055702066)
                                         }
                                     }
                                 }
@@ -177,66 +197,89 @@ def Xform "robinion" (
 
     over "Physics"
     {
-        def PhysicsRevoluteJoint "right_back_thigh_loop_joint"
-        {
-            uniform token physics:axis = "Y"
-            rel physics:body0 = </robinion/Geometry/base_link/lower_body_link/right_hip_yaw_link/right_hip_roll_pitch_link/right_back_thigh_pitch_link>
-            rel physics:body1 = </robinion/Geometry/base_link/lower_body_link/right_hip_yaw_link/right_hip_roll_pitch_link/right_front_thigh_pitch_link/right_knee_pitch_link>
-            float physics:breakForce = 3.4028235e38
-            float physics:breakTorque = 3.4028235e38
-            uniform bool physics:excludeFromArticulation = 1
-            point3f physics:localPos0 = (0, 0, -0.2)
-            point3f physics:localPos1 = (-0.04125, 0, 0)
-            quatf physics:localRot0 = (1, 0, 0, 0)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsRevoluteJoint "right_back_shin_loop_joint"
-        {
-            uniform token physics:axis = "Y"
-            rel physics:body0 = </robinion/Geometry/base_link/lower_body_link/right_hip_yaw_link/right_hip_roll_pitch_link/right_front_thigh_pitch_link/right_knee_pitch_link/right_back_shin_pitch_link>
-            rel physics:body1 = </robinion/Geometry/base_link/lower_body_link/right_hip_yaw_link/right_hip_roll_pitch_link/right_front_thigh_pitch_link/right_knee_pitch_link/right_front_shin_pitch_link/right_ankle_roll_pitch_link>
-            float physics:breakForce = 3.4028235e38
-            float physics:breakTorque = 3.4028235e38
-            uniform bool physics:excludeFromArticulation = 1
-            point3f physics:localPos0 = (0, 0, -0.2)
-            point3f physics:localPos1 = (-0.04125, 0, 0)
-            quatf physics:localRot0 = (1, 0, 0, 0)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsRevoluteJoint "left_back_thigh_loop_joint"
-        {
-            uniform token physics:axis = "Y"
-            rel physics:body0 = </robinion/Geometry/base_link/lower_body_link/left_hip_yaw_link/left_hip_roll_pitch_link/left_back_thigh_pitch_link>
-            rel physics:body1 = </robinion/Geometry/base_link/lower_body_link/left_hip_yaw_link/left_hip_roll_pitch_link/left_front_thigh_pitch_link/left_knee_pitch_link>
-            float physics:breakForce = 3.4028235e38
-            float physics:breakTorque = 3.4028235e38
-            uniform bool physics:excludeFromArticulation = 1
-            point3f physics:localPos0 = (0, 0, -0.2)
-            point3f physics:localPos1 = (-0.04125, 0, 0)
-            quatf physics:localRot0 = (1, 0, 0, 0)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsRevoluteJoint "left_back_shin_loop_joint"
-        {
-            uniform token physics:axis = "Y"
-            rel physics:body0 = </robinion/Geometry/base_link/lower_body_link/left_hip_yaw_link/left_hip_roll_pitch_link/left_front_thigh_pitch_link/left_knee_pitch_link/left_back_shin_pitch_link>
-            rel physics:body1 = </robinion/Geometry/base_link/lower_body_link/left_hip_yaw_link/left_hip_roll_pitch_link/left_front_thigh_pitch_link/left_knee_pitch_link/left_front_shin_pitch_link/left_ankle_roll_pitch_link>
-            float physics:breakForce = 3.4028235e38
-            float physics:breakTorque = 3.4028235e38
-            uniform bool physics:excludeFromArticulation = 1
-            point3f physics:localPos0 = (0, 0, -0.2)
-            point3f physics:localPos1 = (-0.04125, 0, 0)
-            quatf physics:localRot0 = (1, 0, 0, 0)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
         over "base_to_lower_body_fixed_joint" (
             active = false
         )
         {
+        }
+
+        def PhysicsCollisionGroup "RobinionSelfCollisionGroup"
+        {
+            rel collection:colliders:includes = [
+                </robinion/Geometry/base_link/lower_body_link/box>,
+                </robinion/Geometry/base_link/lower_body_link/upper_body_link/box>,
+                </robinion/Geometry/base_link/lower_body_link/upper_body_link/head_yaw_link/head_pitch_link/box>,
+                </robinion/Geometry/base_link/lower_body_link/upper_body_link/right_shoulder_pitch_link/right_shoulder_roll_link/box>,
+                </robinion/Geometry/base_link/lower_body_link/upper_body_link/right_shoulder_pitch_link/right_shoulder_roll_link/right_elbow_yaw_link/right_elbow_pitch_link/box>,
+                </robinion/Geometry/base_link/lower_body_link/upper_body_link/right_shoulder_pitch_link/right_shoulder_roll_link/right_elbow_yaw_link/right_elbow_pitch_link/right_gripper/box>,
+                </robinion/Geometry/base_link/lower_body_link/upper_body_link/left_shoulder_pitch_link/left_shoulder_roll_link/box>,
+                </robinion/Geometry/base_link/lower_body_link/upper_body_link/left_shoulder_pitch_link/left_shoulder_roll_link/left_elbow_yaw_link/left_elbow_pitch_link/box>,
+                </robinion/Geometry/base_link/lower_body_link/upper_body_link/left_shoulder_pitch_link/left_shoulder_roll_link/left_elbow_yaw_link/left_elbow_pitch_link/left_gripper/box>,
+                </robinion/Geometry/base_link/lower_body_link/right_hip_yaw_link/box>,
+                </robinion/Geometry/base_link/lower_body_link/right_hip_yaw_link/right_hip_roll_pitch_link/box>,
+                </robinion/Geometry/base_link/lower_body_link/right_hip_yaw_link/right_hip_roll_pitch_link/right_front_thigh_pitch_link/box>,
+                </robinion/Geometry/base_link/lower_body_link/right_hip_yaw_link/right_hip_roll_pitch_link/right_front_thigh_pitch_link/right_knee_pitch_link/box>,
+                </robinion/Geometry/base_link/lower_body_link/right_hip_yaw_link/right_hip_roll_pitch_link/right_front_thigh_pitch_link/right_knee_pitch_link/right_front_shin_pitch_link/box>,
+                </robinion/Geometry/base_link/lower_body_link/right_hip_yaw_link/right_hip_roll_pitch_link/right_front_thigh_pitch_link/right_knee_pitch_link/right_front_shin_pitch_link/right_ankle_roll_pitch_link/box>,
+                </robinion/Geometry/base_link/lower_body_link/right_hip_yaw_link/right_hip_roll_pitch_link/right_front_thigh_pitch_link/right_knee_pitch_link/right_front_shin_pitch_link/right_ankle_roll_pitch_link/right_foot_roll_link/right_foot_visual_1>,
+                </robinion/Geometry/base_link/lower_body_link/right_hip_yaw_link/right_hip_roll_pitch_link/right_front_thigh_pitch_link/right_knee_pitch_link/right_back_shin_pitch_link/box>,
+                </robinion/Geometry/base_link/lower_body_link/right_hip_yaw_link/right_hip_roll_pitch_link/right_back_thigh_pitch_link/box>,
+                </robinion/Geometry/base_link/lower_body_link/left_hip_yaw_link/box>,
+                </robinion/Geometry/base_link/lower_body_link/left_hip_yaw_link/left_hip_roll_pitch_link/box>,
+                </robinion/Geometry/base_link/lower_body_link/left_hip_yaw_link/left_hip_roll_pitch_link/left_front_thigh_pitch_link/box>,
+                </robinion/Geometry/base_link/lower_body_link/left_hip_yaw_link/left_hip_roll_pitch_link/left_front_thigh_pitch_link/left_knee_pitch_link/box>,
+                </robinion/Geometry/base_link/lower_body_link/left_hip_yaw_link/left_hip_roll_pitch_link/left_front_thigh_pitch_link/left_knee_pitch_link/left_front_shin_pitch_link/box>,
+                </robinion/Geometry/base_link/lower_body_link/left_hip_yaw_link/left_hip_roll_pitch_link/left_front_thigh_pitch_link/left_knee_pitch_link/left_front_shin_pitch_link/left_ankle_roll_pitch_link/box>,
+                </robinion/Geometry/base_link/lower_body_link/left_hip_yaw_link/left_hip_roll_pitch_link/left_front_thigh_pitch_link/left_knee_pitch_link/left_front_shin_pitch_link/left_ankle_roll_pitch_link/left_foot_roll_link/left_foot_visual_1>,
+                </robinion/Geometry/base_link/lower_body_link/left_hip_yaw_link/left_hip_roll_pitch_link/left_front_thigh_pitch_link/left_knee_pitch_link/left_back_shin_pitch_link/box>,
+                </robinion/Geometry/base_link/lower_body_link/left_hip_yaw_link/left_hip_roll_pitch_link/left_back_thigh_pitch_link/box>,
+            ]
+            rel physics:filteredGroups = </robinion/Physics/RobinionSelfCollisionGroup>
+            bool physics:invertFilteredGroups = 0
+        }
+
+        def PhysicsSphericalJoint "right_back_thigh_loop_joint"
+        {
+            rel physics:body0 = </robinion/Geometry/base_link/lower_body_link/right_hip_yaw_link/right_hip_roll_pitch_link/right_back_thigh_pitch_link>
+            rel physics:body1 = </robinion/Geometry/base_link/lower_body_link/right_hip_yaw_link/right_hip_roll_pitch_link/right_front_thigh_pitch_link/right_knee_pitch_link>
+            uniform bool physics:excludeFromArticulation = 1
+            point3f physics:localPos0 = (0, 0, -0.2)
+            point3f physics:localPos1 = (-0.04125, 0, 0)
+            quatf physics:localRot0 = (1, 0, 0, 0)
+            quatf physics:localRot1 = (1, 0, 0, 0)
+        }
+
+        def PhysicsSphericalJoint "right_back_shin_loop_joint"
+        {
+            rel physics:body0 = </robinion/Geometry/base_link/lower_body_link/right_hip_yaw_link/right_hip_roll_pitch_link/right_front_thigh_pitch_link/right_knee_pitch_link/right_back_shin_pitch_link>
+            rel physics:body1 = </robinion/Geometry/base_link/lower_body_link/right_hip_yaw_link/right_hip_roll_pitch_link/right_front_thigh_pitch_link/right_knee_pitch_link/right_front_shin_pitch_link/right_ankle_roll_pitch_link>
+            uniform bool physics:excludeFromArticulation = 1
+            point3f physics:localPos0 = (0, 0, -0.2)
+            point3f physics:localPos1 = (-0.04125, 0, 0)
+            quatf physics:localRot0 = (1, 0, 0, 0)
+            quatf physics:localRot1 = (1, 0, 0, 0)
+        }
+
+        def PhysicsSphericalJoint "left_back_thigh_loop_joint"
+        {
+            rel physics:body0 = </robinion/Geometry/base_link/lower_body_link/left_hip_yaw_link/left_hip_roll_pitch_link/left_back_thigh_pitch_link>
+            rel physics:body1 = </robinion/Geometry/base_link/lower_body_link/left_hip_yaw_link/left_hip_roll_pitch_link/left_front_thigh_pitch_link/left_knee_pitch_link>
+            uniform bool physics:excludeFromArticulation = 1
+            point3f physics:localPos0 = (0, 0, -0.2)
+            point3f physics:localPos1 = (-0.04125, 0, 0)
+            quatf physics:localRot0 = (1, 0, 0, 0)
+            quatf physics:localRot1 = (1, 0, 0, 0)
+        }
+
+        def PhysicsSphericalJoint "left_back_shin_loop_joint"
+        {
+            rel physics:body0 = </robinion/Geometry/base_link/lower_body_link/left_hip_yaw_link/left_hip_roll_pitch_link/left_front_thigh_pitch_link/left_knee_pitch_link/left_back_shin_pitch_link>
+            rel physics:body1 = </robinion/Geometry/base_link/lower_body_link/left_hip_yaw_link/left_hip_roll_pitch_link/left_front_thigh_pitch_link/left_knee_pitch_link/left_front_shin_pitch_link/left_ankle_roll_pitch_link>
+            uniform bool physics:excludeFromArticulation = 1
+            point3f physics:localPos0 = (0, 0, -0.2)
+            point3f physics:localPos1 = (-0.04125, 0, 0)
+            quatf physics:localRot0 = (1, 0, 0, 0)
+            quatf physics:localRot1 = (1, 0, 0, 0)
         }
     }
 }

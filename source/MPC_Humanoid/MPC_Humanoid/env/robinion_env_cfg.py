@@ -27,8 +27,8 @@ from isaaclab.utils.configclass import configclass
 
 from ..robots.robonionv2 import ROBINION_CFG
 
-# Independently actuated joints (legs + torso/arms + head actuator groups in ROBINION_CFG).
-# Excludes the 4 passive parallelogram joints -- never command those directly (AGENTS.md).
+# Independently actuated joints: legs, torso, arms, and head groups from ROBINION_CFG.
+# The four passive parallelogram joints are excluded and must never be commanded directly.
 _ACTUATED_JOINTS = [
     ".*_hip_yaw_joint",
     ".*_hip_roll_joint",
@@ -44,25 +44,23 @@ _ACTUATED_JOINTS = [
     "head_pitch_joint",
 ]
 
-##
-# Scene definition
-##
+# Scene definition.
 
 
 @configclass
 class MpcHumanoidRobinionSceneCfg(InteractiveSceneCfg):
     """Flat-ground scene holding a single Robinion robot."""
 
-    # ground plane
+    # Ground plane.
     ground = AssetBaseCfg(
         prim_path="/World/ground",
         spawn=sim_utils.GroundPlaneCfg(size=(100.0, 100.0)),
     )
 
-    # robot
+    # Robot.
     robot: ArticulationCfg = ROBINION_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
 
-    # lights
+    # Lights.
     dome_light = AssetBaseCfg(
         prim_path="/World/DomeLight",
         spawn=sim_utils.DomeLightCfg(color=(0.9, 0.9, 0.9), intensity=500.0),
@@ -95,25 +93,23 @@ class ObservationsCfg:
     state: StateCfg = StateCfg()
 
 
-##
-# Environment configuration
-##
+# Environment configuration.
 
 
 @configclass
 class MpcHumanoidRobinionEnvCfg(ManagerBasedEnvCfg):
     """Placeholder manager-based environment configuration for the Robinion MPC controller."""
 
-    # Scene settings
+    # Scene settings.
     scene: MpcHumanoidRobinionSceneCfg = MpcHumanoidRobinionSceneCfg(num_envs=1, env_spacing=4.0)
-    # Basic settings
+    # Basic settings.
     observations: ObservationsCfg = ObservationsCfg()
     actions: ActionsCfg = ActionsCfg()
 
     def __post_init__(self) -> None:
         """Post initialization."""
-        # general settings
+        # General settings.
         self.decimation = 2
-        # simulation settings
+        # Simulation settings.
         self.sim.dt = 1 / 120
         self.sim.render_interval = self.decimation

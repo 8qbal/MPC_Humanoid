@@ -34,7 +34,12 @@ parser.add_argument("--urdf", default="references/robinion_description/robinion2
 parser.add_argument("--meshes", default="references/robinion_description/meshes/")
 args = parser.parse_args()
 
-# ---------------------------------------------------------------- URDF
+# Keep these values synchronized with fix_robinion_usd.py.
+NEGATIVE_INERTIA_REPLACEMENT = 5.0e-4
+ANKLE_COM_OFFSET = np.array([0.0245, -0.0245, 0.0])
+ANKLE_LINKS = ("right_ankle_roll_pitch_link", "left_ankle_roll_pitch_link")
+
+# URDF parsing.
 def v3(s):
     return np.array([float(x) for x in s.split()])
 
@@ -91,7 +96,7 @@ for j in root.findall("joint"):
 child_of = {j["child"]: j for j in joints.values()}
 
 
-# ---------------------------------------------------------------- STL
+# STL parsing.
 def read_stl(p):
     d = open(p, "rb").read()
     if d[:5] == b"solid" and b"facet" in d[:400]:
@@ -108,7 +113,7 @@ def area_centroid(T):
     return a.sum(), (a[:, None] * T.mean(1)).sum(0) / a.sum()
 
 
-# ---------------------------------------------------------------- USD helpers
+# USD helpers.
 stage = Usd.Stage.Open(args.usd)
 print(f"USD: {args.usd}  metersPerUnit={UsdGeom.GetStageMetersPerUnit(stage)} "
       f"kgPerUnit={UsdPhysics.GetStageKilogramsPerUnit(stage)} up={UsdGeom.GetStageUpAxis(stage)}")
@@ -153,7 +158,7 @@ def find_link(name):
     return None
 
 
-# ---------------------------------------------------------------- LINKS
+# Link validation.
 print("\n================ LINKS ================")
 usd_mass = 0.0
 for name, L in links.items():
@@ -184,7 +189,11 @@ for name, L in links.items():
         print(f"   mass urdf={u['mass']:.6f} usd={m:.6f} {'OK' if abs(m - u['mass']) < 1e-6 else 'MISMATCH'}")
         if abs(m - u["mass"]) > 1e-6:
             issue("WARN", f"{name}: mass urdf {u['mass']} vs usd {m}")
-        dcom = np.abs(np.array(com) - u["xyz"]).max() if com is not None else np.inf
+        com_expected = u["xyz"]
+        if name in ANKLE_LINKS:
+            com_expected = u["xyz"] + ANKLE_COM_OFFSET
+            issue("INFO", f"{name}: URDF inertial origin ignores the visual mesh offset, expecting CoM shifted by {ANKLE_COM_OFFSET} in USD")
+        dcom = np.abs(np.array(com) - com_expected).max() if com is not None else np.inf
         print(f"   com  d={dcom:.1e} {'OK' if dcom < 1e-6 else 'MISMATCH'}")
         if dcom > 1e-6:
             issue("ERR", f"{name}: CoM mismatch")
@@ -194,6 +203,18 @@ for name, L in links.items():
             Rp, D = q2R(pa), np.diag(np.array(di))
             I_usd, I_inv = Rp @ D @ Rp.T, Rp.T @ D @ Rp
             I_urdf = rpy2R(u["rpy"]) @ u["I"] @ rpy2R(u["rpy"]).T
+            eig_raw = np.linalg.eigvalsh(I_urdf)
+            if (eig_raw < 0).any():
+                # fix_robinion_usd.py replaces negative principal moments with
+                # NEGATIVE_INERTIA_REPLACEMENT (PhysX requires > 0 for articulation
+                # links): compare against that instead of the raw URDF value.
+                w, V = np.linalg.eigh(I_urdf)
+                I_urdf = V @ np.diag(np.where(w < 0, NEGATIVE_INERTIA_REPLACEMENT, w)) @ V.T
+                issue(
+                    "INFO",
+                    f"{name}: URDF inertia has negative principal value {np.sort(eig_raw)}, "
+                    f"expecting it replaced with {NEGATIVE_INERTIA_REPLACEMENT} in USD",
+                )
             scale = max(np.abs(I_urdf).max(), 1e-12)
             rel, rel_inv = np.abs(I_usd - I_urdf).max() / scale, np.abs(I_inv - I_urdf).max() / scale
             eig = np.sort(np.linalg.eigvalsh(I_urdf))
@@ -202,8 +223,6 @@ for name, L in links.items():
                 issue("ERR", f"{name}: principalAxes is INVERTED (converter <=0.1.3 bug)")
             elif rel >= 0.01:
                 issue("ERR", f"{name}: inertia tensor mismatch rel {rel:.1%}\n      urdf=\n{I_urdf}\n      usd=\n{I_usd}")
-            if (eig <= 0).any():
-                issue("ERR", f"{name}: URDF inertia has non-positive principal value {eig}")
         else:
             issue("WARN", f"{name}: no diagonalInertia/principalAxes authored")
     elif p.HasAPI(UsdPhysics.RigidBodyAPI):
@@ -275,7 +294,7 @@ for name, L in links.items():
 
 print(f"\nTOTAL mass urdf={sum(l['inertial']['mass'] for l in links.values() if l['inertial']):.6f}  usd={usd_mass:.6f}")
 
-# ---------------------------------------------------------------- JOINTS
+# Joint validation.
 print("\n================ JOINTS ================")
 AX = {"X": np.array([1.0, 0, 0]), "Y": np.array([0, 1.0, 0]), "Z": np.array([0, 0, 1.0])}
 usd_joints = {p.GetName(): p for p in stage.Traverse() if p.IsA(UsdPhysics.Joint)}
@@ -345,7 +364,7 @@ for name, J in joints.items():
         if damp is not None and J["damping"] is not None and abs(damp - J["damping"]) > 1e-4:
             issue("WARN", f"{name}: damping {damp:.4g} != urdf {J['damping']}")
 
-# ---------------------------------------------------------------- EXTRA (loop) JOINTS
+# Loop-closure validation.
 print("\n================ EXTRA USD JOINTS (loop closures) ================")
 for n, p in usd_joints.items():
     if n in joints:

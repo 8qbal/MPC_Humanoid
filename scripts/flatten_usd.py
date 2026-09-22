@@ -31,7 +31,7 @@ stage = Usd.Stage.Open(args.src)
 default_prim = stage.GetRootLayer().defaultPrim
 assert default_prim, f"{args.src} has no defaultPrim"
 
-flat = stage.Flatten()  # one Sdf.Layer with everything composed
+flat = stage.Flatten()  # One Sdf.Layer with everything composed.
 for name in [p.name for p in flat.rootPrims if p.name != default_prim]:
     del flat.pseudoRoot.nameChildren[name]
     print("dropped /" + name)

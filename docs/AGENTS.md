@@ -44,6 +44,15 @@ Linting: `ruff` (line length 120, `E,F,I,UP,W`) + `ruff-format` + `codespell`, r
 via pre-commit. Match existing code style (docstrings, type hints, `from __future__
 import annotations`) rather than introducing a new one.
 
+## Comments
+
+Do not over-comment. Default to no comments — well-named code should speak for
+itself. Only add a comment when the *why* is non-obvious: a hidden constraint, a
+physical/mechanical fact (e.g. why a joint is passive), a workaround for a specific
+upstream bug, or a numeric value whose source (URDF field, datasheet, mesh
+computation) isn't otherwise documented nearby. Never comment on *what* the code
+does, restate the function/variable name, or leave narration of the current task.
+
 ## Repository layout
 
 ```
@@ -75,6 +84,8 @@ uv run urdf_usd_converter references/robinion_description/robinion2.urdf assets/
 uv run python scripts/fix_robinion_usd.py assets/robonionv2/robinion.usda  # 2. hand-made physics fixes
 uv run python scripts/flatten_usd.py assets/robonionv2/robinion.usda assets/robonionv2.usd  # 3. standalone asset
 uv run python scripts/check_urdf_vs_usd.py assets/robonionv2.usd            # 4. verify against URDF+STL
+uv run python scripts/drop_test.py                                          # 5. headless drop test (venv engine)
+/home/tkuai/isaacsim/python.sh scripts/drop_test.py --dt 0.0166667          # 5b. same, on the GUI's Isaac Sim 6.0.1 engine
 ```
 
 Rules when working on this pipeline:
@@ -93,7 +104,8 @@ Rules when working on this pipeline:
 ## When editing robot/task config
 
 - `robots/robonionv2.py` deliberately keeps the actuator model (stiffness/damping/
-  armature, derived from the Dynamixel XH540-W270/AX-12A datasheets) separate from the
+  armature, estimated from the Dynamixel XH540-W270/XH430-W350 datasheets; effort/velocity limits
+  taken verbatim from the URDF, which the user confirmed correct) separate from the
   USD asset's raw inertial/collision data — don't fold one into the other.
 - The 4 parallelogram-passive joints (`*_knee_pitch_joint`, `*_back_thigh_pitch_joint`,
   `*_front_shin_pitch_joint`, `*_back_shin_pitch_joint`) are unmotored by design

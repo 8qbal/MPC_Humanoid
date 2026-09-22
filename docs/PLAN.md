@@ -4,7 +4,7 @@
 
 Build a simulation-first, receding-horizon controller for the Robinion v2 humanoid in Isaac Lab.  The first usable milestone is stable standing and commanded planar walking on a flat floor; rough terrain, vision, and hardware deployment are later milestones.
 
-The controller must respect the robot's floating base, contact forces, actuator torque/speed limits, joint limits, and the two parallelogram leg mechanisms.  It must control only independent actuated coordinates: hip yaw, hip roll, front-thigh pitch, front-shin pitch, ankle roll, torso, and optionally arms.  The passive four-bar joints remain uncommanded and are constrained by the USD loop closures.
+The controller must respect the robot's floating base, contact forces, actuator torque/speed limits, joint limits, and the two parallelogram leg mechanisms.  It must control only independent actuated coordinates: hip yaw, hip roll, front-thigh pitch (hip pitch motor), ankle pitch (ankle pitch motor), ankle roll, torso, and optionally arms.  The passive four-bar joints (`*_back_thigh_pitch`, `*_knee_pitch`, `*_front_shin_pitch`, `*_back_shin_pitch`) remain uncommanded and are constrained by the USD loop closures -- note `front_shin_pitch`, not `ankle_pitch`, is the passive one; the ankle-pitch motor drives the shin parallelogram from its distal end (user-confirmed, see `references/docs/joint_info.md`).
 
 ## Architecture
 
@@ -127,7 +127,7 @@ Keep the generated cart-pole configuration isolated until the Robinion task is r
 
 ## Decisions required before implementation
 
-1. Confirm the physical motor assignment for the thigh stage, especially whether the apparent dual-motor right thigh and the left/right URDF effort mismatch are real.
+1. ~~Confirm the physical motor assignment for the thigh stage~~ -- resolved: 5 motors/leg (hip yaw, hip roll, hip pitch = `front_thigh_pitch`, ankle pitch, ankle roll), `front_shin_pitch` is passive not `ankle_pitch`; the left/right front-thigh effort asymmetry (9.9 vs 19.8 N·m) in the URDF is confirmed real, not a typo -- both per user confirmation, see `references/docs/joint_info.md`.
 2. Measure and confirm the real effective parallelogram link length (the URDF says 0.20 m while the IK reference uses 0.18 m).
 3. Confirm the intended low-level hardware command mode: current/torque, position with current limit, or position-only.  This determines whether the hardware-facing WBC emits torque or impedance targets.
 4. Select the initial walking target (recommended: flat ground, 0.1 m/s forward, no arm swing) and the target compute hardware/deadline.

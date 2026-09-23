@@ -24,12 +24,11 @@ args = parser.parse_args()
 app_launcher = AppLauncher(args)
 simulation_app = app_launcher.app
 
-import torch  # noqa: E402
+import torch  
 
-from isaaclab.envs import ManagerBasedEnv  # noqa: E402
+from isaaclab.envs import ManagerBasedEnv  
 
-from MPC_Humanoid.env import MpcHumanoidRobinionEnvCfg  # noqa: E402
-
+from MPC_Humanoid.env import MpcHumanoidRobinionEnvCfg  
 
 def main() -> None:
     cfg = MpcHumanoidRobinionEnvCfg()

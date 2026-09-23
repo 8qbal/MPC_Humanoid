@@ -1,4 +1,4 @@
-"""Robinion TKU humanoid: 21x Dynamixel XH540-W270 + 2x XH430-W350 (head), parallelogram legs, 11.1 V bus."""
+# Robinion TKU humanoid
 
 from __future__ import annotations
 
@@ -20,11 +20,7 @@ URDF_LIMITS = {  # group: (effort [N·m], velocity [rad/s])
 }
 URDF_FRICTION = 0.0  # N·m, <dynamics friction> on every joint
 
-# Values not defined in the URDF come from the servo datasheets (11.1 V bus). Damping is the
-# back-EMF value (stall torque / no-load speed), not the URDF <dynamics damping="0.1">: that
-# field is joint viscous friction, and used as the drive D-gain it left the standing robot
-# rocking (user decision). DCMotorCfg is an explicit PD, so this damping is only numerically
-# stable for D * dt / armature < 2 -> physics dt must be <= 1 ms.
+# Values not defined in the URDF come from the servo datasheets (use 11.1 V bus til i check with jaesik)
 XH540_STIFFNESS = 42.0  # N·m/rad
 XH430_STIFFNESS = 16.6  # N·m/rad
 XH540_DAMPING = 2.4  # N·m·s/rad, 9.2 N·m / 3.77 rad/s
@@ -33,15 +29,15 @@ XH540_ARMATURE = 0.003
 XH430_ARMATURE = 0.002
 
 # Standing crouch of the parallelogram legs: the knee/shin follow the driven thigh/ankle by geometry.
-_LEG_CROUCH = 0.1  # rad
-# URDF zero is a T-pose; roll the shoulders so the arms hang down (URDF limit is 90 deg, soft 81).
-_SHOULDER_ROLL_DOWN = -1.4  # rad
+_LEG_CROUCH = 0.0  # rad
+# set 0 for tpose, -1.4 for arm down
+_SHOULDER_ROLL_DOWN = 0.0  # rad
 
 ROBINION_CFG = ArticulationCfg(
     prim_path="{ENV_REGEX_NS}/Robot",
     spawn=sim_utils.UsdFileCfg(
         usd_path=f"{MPC_HUMANOID_ASSETS_DIR}/robonionv2.usd",
-        activate_contact_sensors=True,
+        activate_contact_sensors=False,
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
             disable_gravity=False,
             retain_accelerations=False,

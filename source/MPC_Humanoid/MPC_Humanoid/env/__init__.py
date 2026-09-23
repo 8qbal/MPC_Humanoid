@@ -3,8 +3,8 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Robinion scene/env config driven directly by the MPC controller (no gym/RL task)."""
+"""Robonion scene/env config driven directly by the MPC controller"""
 
-from .robinion_env_cfg import MpcHumanoidRobinionEnvCfg, MpcHumanoidRobinionSceneCfg
+from .robonion_env_cfg import MpcHumanoidRobonionEnvCfg, MpcHumanoidRobonionSceneCfg
 
-__all__ = ["MpcHumanoidRobinionEnvCfg", "MpcHumanoidRobinionSceneCfg"]
+__all__ = ["MpcHumanoidRobonionEnvCfg", "MpcHumanoidRobonionSceneCfg"]

@@ -1,4 +1,4 @@
-# Robinion TKU humanoid
+# Robonion TKU humanoid
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from isaaclab.assets import ArticulationCfg
 MPC_HUMANOID_ASSETS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../assets"))
 
 
-# Motor parameters follow references/robinion_description/robinion2.urdf, which is authoritative for
+# Motor parameters follow references/robonion_description/robonion2.urdf, which is authoritative for
 URDF_LIMITS = {  # group: (effort [N·m], velocity [rad/s])
     "yaw": (4.1, 4.82),  # hip yaw, elbow yaw, head
     "torso_arms": (10.6, 3.14),  # torso pitch, shoulder pitch/roll, elbow pitch
@@ -28,16 +28,16 @@ XH430_DAMPING = 1.1  # N·m·s/rad, 3.1 N·m / 2.83 rad/s
 XH540_ARMATURE = 0.003
 XH430_ARMATURE = 0.002
 
-# Standing crouch of the parallelogram legs: the knee/shin follow the driven thigh/ankle by geometry.
+# 0 rad for standing more than 0 will crouch
 _LEG_CROUCH = 0.0  # rad
-# set 0 for tpose, -1.4 for arm down
+# set 0 for tpose, -1.4 for arm down initialize
 _SHOULDER_ROLL_DOWN = 0.0  # rad
 
-ROBINION_CFG = ArticulationCfg(
+Robonion_CFG = ArticulationCfg(
     prim_path="{ENV_REGEX_NS}/Robot",
     spawn=sim_utils.UsdFileCfg(
         usd_path=f"{MPC_HUMANOID_ASSETS_DIR}/robonionv2.usd",
-        activate_contact_sensors=False,
+        activate_contact_sensors=False, # idk should i turn this on? i think for ground truth is okay but idk for sure
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
             disable_gravity=False,
             retain_accelerations=False,

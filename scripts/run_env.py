@@ -1,4 +1,4 @@
-"""Load MpcHumanoidRobinionEnvCfg and play the simulation with zero commanded effort.
+"""Load MpcHumanoidRobonionEnvCfg and play the simulation with zero commanded effort.
 
 The actuator PD holds the crouch pose, so the robot just stands there. Close the window
 (or Ctrl-C) to stop.
@@ -28,10 +28,10 @@ import torch
 
 from isaaclab.envs import ManagerBasedEnv  
 
-from MPC_Humanoid.env import MpcHumanoidRobinionEnvCfg  
+from MPC_Humanoid.env import MpcHumanoidRobonionEnvCfg  
 
 def main() -> None:
-    cfg = MpcHumanoidRobinionEnvCfg()
+    cfg = MpcHumanoidRobonionEnvCfg()
     cfg.scene.num_envs = args.num_envs
     env = ManagerBasedEnv(cfg)
     robot = env.scene["robot"]

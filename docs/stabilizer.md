@@ -15,17 +15,20 @@ Double-support standing controller that recovers from pushes without stepping.  
 |---|---|---|---|---|
 | `q_a` | `q_act` | 22 | rad | encoders; env obs `joint_pos_rel` + `q_default` |
 | `q̇_a` | `qd_act` | 22 | rad/s | encoders; env obs `joint_vel_rel` |
-| `quat` | `quat` | 4 (x, y, z, w) | — | AHRS orientation (MTi-630); env obs `imu_orientation`, normalised before use |
-| `ω_B` | `gyro` | 3 | rad/s | gyro (MTi-630); env obs `imu_ang_vel` |
+| `quat` | `imu_quat_xyzw` | 4 (x, y, z, w) | — | AHRS orientation of `imu_link` (MTi-630); env obs `imu_orientation`, normalised before use |
+| `ω_I` | `gyro` | 3 | rad/s | gyro in the `imu_link` frame (MTi-630); env obs `imu_ang_vel` |
 
 ### Internal signals
 
 | Symbol | Code name | Dim | Unit | Produced by | Meaning |
 |---|---|---|---|---|---|
 | `q` | `q_full` | 29 | rad | [A] | all revolute joints incl. passive ones, `q = G q_a` |
-| `c` | `c_S` | 2 | m | [A] | measured CoM (x, y) in S |
-| `ċ` | `cdot_S` | 2 | m/s | [A] | measured CoM velocity, low-pass filtered finite difference |
+| `c` | `c` | 2 | m | [A] | measured CoM (x, y) in S |
+| `ω_B` | `v[3:6]` | 3 | rad/s | [A] | pelvis angular velocity, from the gyro minus the torso-pitch rate |
+| `ċ` | `cdot` | 2 | m/s | [A] | measured CoM velocity from gyro + joint velocities (Jacobians), low-pass filtered |
 | `ξ` | `xi` | 2 | m | [A] | measured DCM, `xi = c + ċ / ω` |
+| `h_c` | `com_height` | 1 | m | [A] | estimated CoM height above the sole plane |
+| `fallen` | `fallen` | bool | — | [A] | `h_c < h_min`: the feet-flat model no longer holds (robot falling or down) |
 | `p` | `p` | 2 × N | m | [B] | planned ZMP over the horizon (per axis) |
 | `p₀` | `p0` | 2 | m | [B] | first planned ZMP, the only one applied |
 | `p_prev` | `p_prev` | 2 | m | [B] | `p0` of the previous tick (for the ZMP-rate cost) |
@@ -45,7 +48,7 @@ Double-support standing controller that recovers from pushes without stepping.  
 | Symbol | Code name | Initial value | Unit | Source / note |
 |---|---|---|---|---|
 | `g` | `g` | 9.81 | m/s² | |
-| `m` | `mass` | 7.95 | kg | URDF sum of link masses (controller URDF after the USD fixes may differ slightly) |
+| `m` | `mass` | 7.9325 | kg | total mass of `assets/robonionv2_controller.urdf` (= USD, after the fixes) |
 | `h` | `h` | ≈ 0.50 | m | CoM height above the sole at the standing pose, from FK of the controller model |
 | `ω` | `omega` | `sqrt(g / h)` ≈ 4.4 | rad/s | |
 | `dt` | `dt` | 0.005 | s | sim dt 1 ms × decimation 5 |
@@ -54,10 +57,12 @@ Double-support standing controller that recovers from pushes without stepping.  
 | `a` | `a` | `e^(ω Δ)` ≈ 1.09 | — | |
 | `Q`, `R`, `S` | `w_xi`, `w_zmp`, `w_dzmp` | 1, 0.1, 1 | — | DCM tracking, ZMP centring, ZMP rate |
 | `m_zmp` | `zmp_margin` | 0.01 | m | safety margin inside the sole edges |
-| `ξ_ref`, `p_ref` | `xi_ref`, `p_ref` | undecided | m | standing pose (x ≈ 0.001) or sole centre (x ≈ +0.028), see *Open decisions* |
-| `p_min`, `p_max` | `zmp_bounds` | x: [−0.059, +0.116], y: [−0.088, +0.089] | m | hull of both soles at the standing pose; from the foot mesh `*_foot_visual.stl` (CAD) and FK |
+| `ξ_ref`, `p_ref` | `xi_ref`, `p_ref` | (0, 0) | m | origin of S = sole centre (user decision): equal 8.75 cm margin to heel and toe edges; the current standing CoM sits at x ≈ −0.028 in S |
+| `p_min`, `p_max` | `zmp_bounds` | x: ±0.0875, y: ±0.0885 | m | hull of both soles in S at the standing pose; from the foot mesh `*_foot_visual.stl` (CAD) and FK |
 | sole size | `sole_*` | length 0.175 (+0.068 / −0.107 from the ankle-roll axis), width 0.067, depth 0.056 below the ankle-roll axis | m | foot mesh `*_foot_visual.stl` (CAD) |
-| `f_c` | `vel_cutoff` | 20 | Hz | low-pass cutoff for `ċ` |
+| `f_c` | `vel_cutoff` | 50 | Hz | low-pass cutoff for `ċ`; 20 Hz lagged the push peak by ≈ 14 %, 50 Hz by ≈ 6 % (`scripts/check_estimator.py`) |
+| `h_min` | `min_com_height` | 0.25 | m | below this the estimator reports `fallen` |
+| `sole_centre` | `SOLE_CENTRE` | (−0.0195, 0, −0.056) | m | sole centre in `*_foot_roll_link`, from the foot mesh (CAD) |
 | `q̇_max` | `qd_max` | 4.08 (legs) | rad/s | URDF velocity limit |
 | `θ_max` | `tilt_limit` | 20 | deg | base roll/pitch that triggers `safe_stop` |
 
@@ -72,13 +77,26 @@ knee = −front_thigh        back_thigh = front_thigh
 front_shin = −ankle_pitch  back_shin  = front_shin
 ```
 
-Forward kinematics of the controller model with the base orientation set to the IMU roll/pitch (yaw ignored, base position 0) gives the CoM and both sole centres; then
+Model: `assets/robonionv2_controller.urdf` (Pinocchio, free-flyer root `lower_body_link`).  Forward kinematics with the base orientation taken from the AHRS (roll/pitch only, yaw removed, base position 0) gives the CoM and both sole centres `o_L`, `o_R`; `o = (o_L + o_R) / 2` is the origin of S.
 
 ```text
-c   = CoM_xy − midpoint(sole_left, sole_right)_xy
-ċ   = lowpass((c[t] − c[t−1]) / dt, f_c)
-ξ   = c + ċ / ω
+R_WB = R_WI(quat) · R_BI(q)ᵀ, then yaw removed          (IMU sits on upper_body_link)
+c    = (CoM − o)_xy
+h_c  = (CoM − o)_z
 ```
+
+The CoM velocity comes from the gyro and the joint velocities through Jacobians, not from differentiating `c` (differentiating the orientation-noisy `c` gave ±8 cm of noise on `ξ`):
+
+```text
+v    = [ 0 ; ω_B ; G q̇_a ]                               base linear velocity left 0: it moves CoM and soles alike and cancels
+ω_B  : solved from ω_I = J_I,ang v                       (J_I = LOCAL Jacobian of imu_link; removes the torso-pitch rate)
+ċ    = lowpass( [ J_com − (J_oL + J_oR) / 2 ]_xy v , f_c )
+J_o  = J_lin − [R s]× J_ang                              (sole-centre point Jacobian, LOCAL_WORLD_ALIGNED, s = sole_centre)
+ξ    = c + ċ / ω,     ω = sqrt(g / max(h_c, h_min))
+fallen = h_c < h_min
+```
+
+Validation (`scripts/check_estimator.py`, standing robot, 1 N·s pushes on `upper_body_link`, x/y alternating): parallelogram coupling error ≤ 0.014°; without sensor noise `c` within 0.07 mm and the push peak of `ξ` within 1.4 mm; with the env's AHRS noise model (bias per reset ≈ 0.2°, small white jitter) `c` carries a constant offset of ≈ 4.4 mm and `ξ` changes follow the truth within ≈ 2 mm.
 
 ### [B] DCM MPC (x and y solved separately)
 
@@ -121,8 +139,20 @@ q_des ← clamp(q_des, soft joint limits)
 ξ outside [p_min, p_max]   → flag "not recoverable without stepping"
 ```
 
+## Baseline without stabilizer
+
+Largest push on `upper_body_link` (constant force for 0.05 s) that the robot survives with the servos only holding the default pose, from `scripts/check_estimator.py` (fall = root height well below the standing 0.554 m, or the estimator reporting `fallen`).  The theoretical limit is `J_max = m ω · margin`, with the ZMP jumping straight to the sole edge and the standing CoM 2.6 cm behind the sole centre.
+
+| Direction | Survives | Falls | Theoretical limit |
+|---|---|---|---|
+| +x (forward) | 2.5 N·s | 3.0 N·s | 4.0 N·s |
+| −x (backward) | 1.75 N·s | 2.0 N·s | 2.1 N·s |
+| +y (left) | 2.0 N·s | 2.5 N·s | 3.1 N·s |
+| −y (right) | 2.25 N·s | 2.5 N·s | 3.1 N·s |
+
+The stabilizer has to beat these numbers; backward is the weakest direction because the standing CoM is close to the heel.
+
 ## Open decisions
 
-1. `ξ_ref` / `p_ref`: keep the standing CoM position (6 cm to the heel edge, 11.5 cm to the toe edge) or move to the sole centre (≈ 8.7 cm both ways).
-2. Code location and push-test mechanism.
-3. Controller model: generated from the USD as a controller URDF (decided); the export tool is not written yet.
+1. Code location and push-test mechanism.
+2. ~~Controller model~~ -- resolved: `assets/robonionv2_controller.urdf`, generated from the USD by `tools/asset/export_controller_urdf.py`.

@@ -9,6 +9,7 @@ Reference sheet for building the Robinion `ArticulationCfg` in `source/MPC_Human
 | `references/robinion_description/robinion2.urdf` | Generated URDF (from `urdf/robinion2.xacro` + `body/head/left_arm/right_arm/left_leg/right_leg.xacro`). **Primary source for all numbers below.** |
 | `assets/robonionv2/` | Raw output of `urdf_usd_converter` (converter version pinned in `robinion.usda`'s `customLayerData.creator`), *before* the hand-authored fixes below: `robinion.usda` (thin root, payloads `Payload/Contents.usda`) + `Payload/{Geometry,Physics,Contents}.usda` + `Payload/GeometryLibrary.usdc` (meshes). Plain tree import: no loop closure, no articulation self-collision override, base welded to the world. Kept as an editable, re-buildable source — do not hand-edit `Payload/`, only `robinion.usda`. |
 | `assets/robonionv2.usd` | **The asset actually loaded by `ArticulationCfg`.** Flattened, standalone (`tools/asset/flatten_usd.py`) copy of `assets/robonionv2/robinion.usda` after the 5 fixes in *USD verification* below: loop-closure joints, self-collision off, floating base, foot inertia, `left_back_thigh_pitch_link` mass. Regenerate it whenever `robonionv2/robinion.usda` changes — never edit it directly. |
+| `assets/robonionv2_controller.urdf` | URDF for the controller's Pinocchio model, **generated from `assets/robonionv2.usd`** by `tools/asset/export_controller_urdf.py` (see *Controller URDF*). Carries the USD's corrected inertials, not the reference URDF's. Regenerate it whenever `assets/robonionv2.usd` changes — never edit it directly. |
 | `references/Robinion_InverseKinematic/robinion_description/` | Second copy of the description with a mirrored `leg.xacro` (different axis signs) and `ik_controller_fullbody.py`. The IK script is the only document that states the **parallelogram coupling** between joints (see *Leg mechanism*). |
 
 Notes:
@@ -286,6 +287,9 @@ uv run python tools/asset/flatten_usd.py assets/robonionv2/robinion.usda assets/
 uv run python tools/asset/check_urdf_vs_usd.py assets/robonionv2.usd
 
 # 5. Dynamic sanity check: load the env and let the robot stand (scripts/run_env.py).
+
+# 6. Export the controller URDF (Pinocchio model) from the final USD; prints OK/MISMATCH
+uv run python tools/asset/export_controller_urdf.py assets/robonionv2.usd assets/robonionv2_controller.urdf
 ```
 
 The two installs ship different PhysX builds: the revolute loop closure that 110.3.x tolerates makes 110.1.13 explode on ground contact (see *Leg mechanism*). This was diagnosed with a standalone drop test (`scripts/drop_test.py`, since removed — see git history) that dropped the undriven robot on both engines; the spherical closure now in the asset is stable on both.
@@ -325,6 +329,16 @@ Counter({'INFO': 5, 'WARN': 1})
 ```
 
 Everything else matches the URDF exactly: 35 links, 34 joints (29 revolute + 5 fixed), all transforms/mass/CoM/inertia/mesh/collision data, all 4 loop-joint anchors at 0.000 mm gap, self-collision off, no stray `PhysicsScene`/viewport prims in the flattened file, and `layers used: ['assets/robonionv2.usd']` (standalone, no dependency on `assets/robonionv2/` or `references/`).
+
+### Controller URDF
+
+Pinocchio cannot read USD, and the reference URDF lacks the inertial corrections authored by `fix_robinion_usd.py`, so the controller loads `assets/robonionv2_controller.urdf`, exported from the final USD by `tools/asset/export_controller_urdf.py`:
+
+- **Links:** the 32 rigid bodies with mass, CoM and full inertia tensor (`R·diag·Rᵀ` from `principalAxes`/`diagonalInertia`), plus `imu_link` and `cam_link` as massless frames.  No meshes.
+- **Joints:** 29 revolute + 2 gripper fixed joints from the physics joint frames (`localPos`/`localRot`), with axis, limits, effort, velocity and damping.  The 4 loop-closure joints are skipped (a URDF is a tree); the controller closes the loops with the linear parallelogram coupling (see *Leg mechanism*).
+- **Root:** `lower_body_link`, the articulation root in the USD (`base_link` is not a body there).
+
+The script loads the result back with Pinocchio (free-flyer root) and compares it to the USD at the zero pose.  Current result: `nq = 36`, `nv = 35`, body placements within `3e-8 m`, total mass `7.932532 kg` in both, whole-body CoM within `2e-9 m`.  Against the reference URDF, forward kinematics at 20 random poses agree within `1.3e-6 m` and joint limits/efforts match; only the inertials differ, by the USD fixes.  `check_urdf_vs_usd.py` is not meant for this file: it expects the raw reference URDF (e.g. it expects the ankle CoM offset between URDF and USD) and compares meshes.
 
 ### Observations carried over from the URDF (not conversion errors)
 

@@ -24,6 +24,7 @@ from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sensors import ImuCfg, PvaCfg
 from isaaclab.utils.configclass import configclass
 from isaaclab.utils.noise import GaussianNoiseCfg as Gnoise
+from isaaclab.utils.noise import NoiseModelWithAdditiveBiasCfg
 from isaaclab_physx.physics import PhysxCfg
 
 from ..robots.robonionv2 import Robonion_CFG
@@ -93,7 +94,9 @@ class ObservationsCfg:
         """
 
         # std at 200 Hz from the Xsens MTi-630 leaflet (Feb 2025): gyro 0.007 deg/s/sqrt(Hz),
-        # accel 60 ug/sqrt(Hz), roll/pitch 0.2 deg RMS (~half-angle on the quaternion components)
+        # accel 60 ug/sqrt(Hz). The 0.2 deg RMS roll/pitch accuracy is a slowly varying error, so it is
+        # a bias resampled at every reset (~half-angle on the quaternion components); the small
+        # per-sample jitter on top is an assumption, the leaflet does not give it.
         imu_ang_vel = ObsTerm(
             func=mdp.imu_ang_vel, params={"asset_cfg": SceneEntityCfg("imu")}, noise=Gnoise(std=0.002)
         )
@@ -101,7 +104,9 @@ class ObservationsCfg:
             func=mdp.imu_lin_acc, params={"asset_cfg": SceneEntityCfg("imu")}, noise=Gnoise(std=0.008)
         )
         imu_orientation = ObsTerm(
-            func=mdp.pva_orientation, params={"asset_cfg": SceneEntityCfg("ahrs")}, noise=Gnoise(std=0.0018)
+            func=mdp.pva_orientation,
+            params={"asset_cfg": SceneEntityCfg("ahrs")},
+            noise=NoiseModelWithAdditiveBiasCfg(noise_cfg=Gnoise(std=0.0002), bias_noise_cfg=Gnoise(std=0.0018)),
         )
         base_lin_vel = ObsTerm(func=mdp.base_lin_vel)
         base_ang_vel = ObsTerm(func=mdp.base_ang_vel)

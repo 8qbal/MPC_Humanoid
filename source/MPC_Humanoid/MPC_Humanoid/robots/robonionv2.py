@@ -31,7 +31,7 @@ XH430_ARMATURE = 0.002
 # 0 rad for standing more than 0 will crouch
 _LEG_CROUCH = 0.0  # rad
 # set 0 for tpose, -1.4 for arm down initialize
-_SHOULDER_ROLL_DOWN = 0.0  # rad
+_SHOULDER_ROLL_DOWN = -1.0  # rad
 
 Robonion_CFG = ArticulationCfg(
     prim_path="{ENV_REGEX_NS}/Robot",

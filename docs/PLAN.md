@@ -8,7 +8,7 @@ The controller must respect the robot's floating base, contact forces, actuator 
 
 ## Current roadmap
 
-Target: fast (0.3--0.4 m/s), reasonably natural walking that stays stable under pushes, with MPC as the only control law (no RL).  Servos run in Dynamixel position mode (mode 3), so the controller outputs joint position targets.  The real robot has no foot force/contact sensors; the `ContactSensorCfg` in simulation is ground truth for validation only.
+Target: fast (0.3--0.4 m/s), reasonably natural walking that stays stable under pushes, with MPC as the only control law (no RL).  Servos run in Dynamixel position mode (mode 3), so the controller outputs joint position targets.  The robot has no foot force/contact sensors, in hardware or in simulation.
 
 The core controller is a DCM MPC re-solved every control tick (200 Hz) from the measured state, so it acts as both planner and stabilizer:
 
@@ -58,7 +58,7 @@ Use OSQP (or `qpsolvers`) for the MPC and IK QPs and Pinocchio for kinematics; b
 ## Phase 0 — Freeze interfaces and validate the simulation model
 
 1. Read and preserve the asset workflow in `AGENTS.md` and `references/docs/joint_info.md`; do not regenerate `assets/robonionv2.usd` unless the asset pipeline is deliberately being changed.
-2. Replace the cart-pole placeholder task with a Robinion-specific direct or manager-based environment.  The scene must load `ROBINION_CFG`, a flat ground plane, contact sensors, and deterministic physics settings.
+2. Replace the cart-pole placeholder task with a Robinion-specific direct or manager-based environment.  The scene must load `ROBINION_CFG`, a flat ground plane, and deterministic physics settings.
 3. Create one authoritative `RobinionModelSpec` containing the ordered independent actuated joints, passive joints, foot body names, pelvis body name, nominal standing pose, limits, torque/speed limits, foot sole dimensions, mass, and control periods.  Reuse it in task configuration, observation extraction, MPC, WBC, and tests to prevent ordering errors.
 4. Add a headless smoke script that spawns one robot, resets it to the crouch pose, steps for 10 seconds under gravity, and reports NaNs, joint-limit violations, base height, and contact forces.
 5. Verify physically before controller work: correct left/right foot contacts, no self-collision explosions, stable passive-link loop closure, correct base frame convention (X forward/Y left/Z up), and expected total mass.  Record baseline traces and solver/physics version.
@@ -67,8 +67,8 @@ Use OSQP (or `qpsolvers`) for the MPC and IK QPs and Pinocchio for kinematics; b
 
 ## Phase 1 — State, kinematics, and reference generation
 
-1. Implement a batched `HumanoidState` adapter from Isaac Lab articulation and contact-sensor buffers.  At minimum expose base pose/twist, independent joint positions/velocities, all body poses/velocities, CoM, centroidal momentum, left/right foot poses, and contact state/normal force.
-2. Implement robust contact classification with hysteresis and a minimum dwell time, estimated from gait schedule, leg kinematics and IMU (the real robot has no foot force sensors).  The sim `ContactSensorCfg` feeds the same interface only as ground truth for comparison and logging; never infer contact only from foot height.
+1. Implement a batched `HumanoidState` adapter from Isaac Lab articulation and IMU buffers.  At minimum expose base pose/twist, independent joint positions/velocities, all body poses/velocities, CoM, centroidal momentum, left/right foot poses, and estimated contact state.
+2. Implement robust contact classification with hysteresis and a minimum dwell time, estimated from gait schedule, leg kinematics and IMU (the robot has no foot force sensors).  Log the estimated contact state; never infer contact only from foot height.
 3. Implement the independent-coordinate mapping for each parallelogram leg and tests that compare reconstructed passive angles with measured USD articulation angles.
 4. Add kinematics helpers for the sole frame, CoM, support polygon, stance/swing selection, and terrain height query.  Keep all tensor shapes explicit as `(num_envs, ...)` and define one frame convention for every vector.
 5. Add command and reference modules: constant velocity command, stop command, bounded yaw-rate command, phase-based alternating contact schedule, and swing-foot trajectories (quintic horizontal interpolation plus configurable clearance).

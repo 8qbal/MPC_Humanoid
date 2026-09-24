@@ -23,6 +23,7 @@ from isaaclab.scene import InteractiveSceneCfg
 # PvaCfg for AHRS, ImuCfg for the IMU
 from isaaclab.sensors import ImuCfg, PvaCfg
 from isaaclab.utils.configclass import configclass
+from isaaclab.utils.noise import GaussianNoiseCfg as Gnoise
 from isaaclab_physx.physics import PhysxCfg
 
 from ..robots.robonionv2 import Robonion_CFG
@@ -80,7 +81,7 @@ class MpcHumanoidRobonionSceneCfg(InteractiveSceneCfg):
 # Action sent to the robot
 @configclass
 class ActionsCfg:
-    joint_effort = mdp.JointPositionActionCfg(asset_name="robot", joint_names=_ACTUATED_JOINTS, scale=1.0)
+    joint_pos = mdp.JointPositionActionCfg(asset_name="robot", joint_names=_ACTUATED_JOINTS, scale=1.0)
 
 # Data that can be observed will be used to feed the controller
 @configclass
@@ -91,9 +92,17 @@ class ObservationsCfg:
         State that can be observed and measured.
         """
 
-        imu_ang_vel = ObsTerm(func=mdp.imu_ang_vel, params={"asset_cfg": SceneEntityCfg("imu")})
-        imu_lin_acc = ObsTerm(func=mdp.imu_lin_acc, params={"asset_cfg": SceneEntityCfg("imu")})
-        imu_orientation = ObsTerm(func=mdp.pva_orientation, params={"asset_cfg": SceneEntityCfg("ahrs")})
+        # std at 200 Hz from the Xsens MTi-630 leaflet (Feb 2025): gyro 0.007 deg/s/sqrt(Hz),
+        # accel 60 ug/sqrt(Hz), roll/pitch 0.2 deg RMS (~half-angle on the quaternion components)
+        imu_ang_vel = ObsTerm(
+            func=mdp.imu_ang_vel, params={"asset_cfg": SceneEntityCfg("imu")}, noise=Gnoise(std=0.002)
+        )
+        imu_lin_acc = ObsTerm(
+            func=mdp.imu_lin_acc, params={"asset_cfg": SceneEntityCfg("imu")}, noise=Gnoise(std=0.008)
+        )
+        imu_orientation = ObsTerm(
+            func=mdp.pva_orientation, params={"asset_cfg": SceneEntityCfg("ahrs")}, noise=Gnoise(std=0.0018)
+        )
         base_lin_vel = ObsTerm(func=mdp.base_lin_vel)
         base_ang_vel = ObsTerm(func=mdp.base_ang_vel)
         projected_gravity = ObsTerm(func=mdp.projected_gravity)

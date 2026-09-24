@@ -6,18 +6,21 @@ Instructions for AI coding agents (Codex, etc.) working in this repository.
 
 An Isaac Lab external project: an installable Python package (`source/MPC_Humanoid`)
 plus assets and reference material for **Robinion**, a Dynamixel-actuated humanoid
-with parallelogram-linkage legs. The long-term goal is an MPC-controlled robot. The
-current phase is to build a correct, high-fidelity real-to-sim model first: an
-MPC/RL-ready `ArticulationCfg` (`source/MPC_Humanoid/MPC_Humanoid/robots/robonionv2.py`)
-backed by a USD asset that matches the robot's URDF/CAD exactly.
+with parallelogram-linkage legs. The goal is an MPC-controlled robot. The real-to-sim
+model (`ArticulationCfg` in `source/MPC_Humanoid/MPC_Humanoid/robots/robonionv2.py`
+backed by `assets/robonionv2.usd`) is done; work has moved on to the controller.
 
 ## Working with the user
 
 Do not create files or write code on your own initiative. Discuss the approach with
 the user first and wait for their go-ahead before creating or editing any file. Then
-implement only what was agreed; `docs/PLAN.md` is a roadmap, not permission to do the
-next items. Propose anything extra (helper modules, scripts, doc updates) in one
-sentence and let the user decide.
+implement only what was agreed. Propose anything extra (helper modules, scripts, doc
+updates) in one sentence and let the user decide.
+
+`docs/PLAN.md` is a roadmap for humans to read, not a task list for you to follow. Its
+phases and checklists do not tell you what to do next or what the current state is
+(Phase 0, the model, is already finished). Take the task from the user, and use the
+plan only as background on decisions already made.
 
 ## Environment
 

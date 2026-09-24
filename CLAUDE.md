@@ -6,19 +6,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 An Isaac Lab external project: an installable Python package (`source/MPC_Humanoid`)
 plus assets and reference material for **Robinion**, a Dynamixel-actuated humanoid
-with parallelogram-linkage legs. The long-term goal is an MPC-controlled robot (see
-`plan.md` for the full phased plan). The current phase is to build a correct,
-high-fidelity real-to-sim model first: an MPC/RL-ready `ArticulationCfg`
-(`source/MPC_Humanoid/MPC_Humanoid/robots/robonionv2.py`) backed by a USD asset that
-matches the robot's URDF/CAD exactly.
+with parallelogram-linkage legs. The goal is an MPC-controlled robot. The real-to-sim
+model (`ArticulationCfg` in `source/MPC_Humanoid/MPC_Humanoid/robots/robonionv2.py`
+backed by `assets/robonionv2.usd`) is done; work has moved on to the controller.
 
 ## Working with the user
 
 Do not create files or write code on your own initiative. Discuss the approach with
 the user first and wait for their go-ahead before creating or editing any file. Then
-implement only what was agreed; `plan.md` is a roadmap, not permission to do the next
-items. Propose anything extra (helper modules, scripts, doc updates) in one sentence
-and let the user decide.
+implement only what was agreed. Propose anything extra (helper modules, scripts, doc
+updates) in one sentence and let the user decide.
+
+`docs/PLAN.md` is a roadmap for humans to read, not a task list for you to follow. Its
+phases and checklists do not tell you what to do next or what the current state is
+(Phase 0, the model, is already finished). Take the task from the user, and use the
+plan only as background on decisions already made.
 
 ## Environment
 
@@ -59,8 +61,7 @@ uv run python scripts/run_env.py --viz kit                    # load the Robinio
 
 Linting: `ruff` (line length 120, `E,F,I,UP,W`) + `ruff-format` + `codespell`, run
 via pre-commit. Match existing code style (docstrings, type hints, `from __future__
-import annotations`) rather than introducing a new one. There is no test suite yet;
-`plan.md`'s proposed layout adds one under `tests/` alongside the MPC modules.
+import annotations`) rather than introducing a new one. There is no test suite yet.
 
 ## Comments
 
@@ -88,7 +89,7 @@ references/                         URDF, CAD-derived docs, git submodules (IK, 
 scripts/                            run_env.py: load + play the env (not part of the package)
 tools/asset/                        URDF -> USD pipeline scripts (fix, flatten, check)
 outputs/                            scratch / generated output, not source of truth
-plan.md                             phased plan for the MPC controller (read before Phase work)
+docs/PLAN.md                        human-facing roadmap for the MPC controller (not a task list)
 ```
 
 `references/robinion_description` and the other `references/*` folders are **git
@@ -109,14 +110,11 @@ project source to hand-edit, except where noted below.
   — there is no training loop here, so it stays a `ManagerBasedEnvCfg`, not
   `ManagerBasedRLEnvCfg`. `observations` and `actions` are required (`MISSING`) on
   the base class, so any env cfg here must define both.
-- `mpc/` — the controller stack from `plan.md`'s architecture (currently only
-  `controller.py`'s `MpcHumanoidController`/`ControllerMode` placeholder; state,
-  contact, reference, centroidal-MPC, and whole-body-QP modules land per-phase).
+- `mpc/` — the controller stack (currently only a placeholder `controller.py`).
   Kept independent of `tasks/` — it's a plain module, not an RL task.
 - `tasks/mpc_humanoid/` — Isaac Lab's generated RL-task tree (gym-registered,
   manager-based, `config/<variant>/` + shared `mdp/`). Currently only holds the
-  generated cart-pole placeholder task (`config/cartpole/`); per `plan.md` Phase 0,
-  keep it isolated until a real Robinion RL/benchmark task is registered here, then
+  generated cart-pole placeholder task (`config/cartpole/`); keep it isolated until a real Robinion RL/benchmark task is registered here, then
   retire it so it can't be run by accident as the humanoid task. **Don't put the MPC
   controller or its non-RL env here** — this tree is specifically for gym-registered
   RL tasks with reward/termination managers.

@@ -80,7 +80,7 @@ class MpcHumanoidRobonionSceneCfg(InteractiveSceneCfg):
 # Action sent to the robot
 @configclass
 class ActionsCfg:
-    joint_effort = mdp.JointEffortActionCfg(asset_name="robot", joint_names=_ACTUATED_JOINTS, scale=1.0)
+    joint_effort = mdp.JointPositionActionCfg(asset_name="robot", joint_names=_ACTUATED_JOINTS, scale=1.0)
 
 # Data that can be observed will be used to feed the controller
 @configclass
@@ -101,7 +101,7 @@ class ObservationsCfg:
         joint_vel_rel = ObsTerm(func=mdp.joint_vel_rel)
 
         def __post_init__(self) -> None:
-            self.enable_corruption = False
+            self.enable_corruption = True
             self.concatenate_terms = True
 
     state: StateCfg = StateCfg()

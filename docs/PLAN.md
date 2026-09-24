@@ -6,34 +6,54 @@ Build a simulation-first, receding-horizon controller for the Robinion v2 humano
 
 The controller must respect the robot's floating base, contact forces, actuator torque/speed limits, joint limits, and the two parallelogram leg mechanisms.  It must control only independent actuated coordinates: hip yaw, hip roll, front-thigh pitch (hip pitch motor), ankle pitch (ankle pitch motor), ankle roll, torso, and optionally arms.  The passive four-bar joints (`*_back_thigh_pitch`, `*_knee_pitch`, `*_front_shin_pitch`, `*_back_shin_pitch`) remain uncommanded and are constrained by the USD loop closures -- note `front_shin_pitch`, not `ankle_pitch`, is the passive one; the ankle-pitch motor drives the shin parallelogram from its distal end (user-confirmed, see `references/docs/joint_info.md`).
 
+## Current roadmap
+
+Target: fast (0.3--0.4 m/s), reasonably natural walking that stays stable under pushes, with MPC as the only control law (no RL).  Servos run in Dynamixel position mode (mode 3), so the controller outputs joint position targets.  The real robot has no foot force/contact sensors; the `ContactSensorCfg` in simulation is ground truth for validation only.
+
+The core controller is a DCM MPC re-solved every control tick (200 Hz) from the measured state, so it acts as both planner and stabilizer:
+
+```text
+estimator -> c, c_dot, xi = c + c_dot / omega
+  -> DCM MPC (ZMP, later footstep position and timing)
+  -> CoM reference -> IK (Pinocchio + parallelogram coupling) -> q_des -> JointPositionAction
+```
+
+Stages, each built on the previous one:
+
+1. **Stabilizer** -- double-support standing that recovers from pushes without stepping (ZMP moved inside the hull of both soles).
+2. **Stepping in place** -- gait scheduler, single support, alternating support polygon, swing-foot spline.
+3. **Fast walking without arm swing** -- footstep position and step timing as MPC decision variables, 0.3--0.4 m/s.
+4. **Fast walking** -- add counter-phase arm swing and other naturalness tuning.
+5. *Maybe:* **stochastic MPC** -- chance-constrained or tube MPC on top of the same QP for noise and disturbance robustness.
+
+Success metrics: maximum recoverable push impulse (N·s) per direction, velocity RMSE, falls per 100 pushes, no servo hitting its velocity limit.
+
 ## Architecture
 
 ```text
-velocity / waypoint command
+velocity command / mode (stand, walk, stop)
           |
           v
-contact & footstep scheduler ----> desired contact sequence
+gait scheduler ------------------> contact sequence, nominal step timing
           |                                  |
           v                                  v
-centroidal MPC <------------------- robot state estimator
-          |       (CoM, momentum, contacts, feet)
+DCM MPC (200 Hz) <----------------- state estimator
+          |       (CoM, DCM, feet, contacts estimated from gait schedule + IMU + kinematics)
           v
-desired CoM / wrench / swing-foot trajectories
+ZMP plan, CoM reference, footstep position and timing
           |
           v
-whole-body inverse dynamics QP
+swing-foot spline + IK (Pinocchio, parallelogram coupling)
           |
           v
-joint torque or impedance targets --> Isaac Lab articulation --> contacts
+joint position targets --> Dynamixel position mode (sim: JointPositionAction) --> contacts
 ```
 
-Use a two-level controller rather than a single full-body nonlinear MPC initially:
+1. The DCM MPC is a small QP re-solved every control tick from the measured state, so it is both the gait planner and the balance stabilizer.  The ZMP is its input; the servos never receive it directly -- the realised ZMP follows from the commanded CoM motion.
+2. The IK maps the CoM reference, stance/swing foot poses and torso orientation to independent joint position targets.  The foot task is 5-D: foot pitch is locked to pelvis pitch by the parallelograms.
+3. Centroidal or whole-body MPC (e.g. whole-body MPC with a learned residual model) may later replace the DCM MPC + IK behind the same controller interface; the DCM controller is the baseline they are compared against.  Neither is on the critical path.
 
-1. A centroidal MPC optimizes center-of-mass motion and contact wrenches over a fixed contact schedule.  This is small enough to solve consistently at 50--100 Hz.
-2. A whole-body controller (WBC) converts the MPC outputs into torque commands while enforcing floating-base dynamics, stance-foot constraints, friction cones, joint bounds, and swing-foot tracking.  Run it at the physics control rate (target 200--500 Hz).
-3. Keep a full-body nonlinear MPC prototype behind the same controller interface for later comparison.  Do not make it the critical path to first walking.
-
-`acados_template` is already declared as a local project dependency; use it for the centroidal optimal-control problem.  Use a sparse QP backend (for example OSQP or the solver available through Isaac Lab) for the WBC after checking dependency compatibility with the existing environment.
+Use OSQP (or `qpsolvers`) for the MPC and IK QPs and Pinocchio for kinematics; both are already in `.venv`.  `acados_template` stays available for later nonlinear MPC variants.
 
 ## Phase 0 — Freeze interfaces and validate the simulation model
 
@@ -48,7 +68,7 @@ Use a two-level controller rather than a single full-body nonlinear MPC initiall
 ## Phase 1 — State, kinematics, and reference generation
 
 1. Implement a batched `HumanoidState` adapter from Isaac Lab articulation and contact-sensor buffers.  At minimum expose base pose/twist, independent joint positions/velocities, all body poses/velocities, CoM, centroidal momentum, left/right foot poses, and contact state/normal force.
-2. Implement robust contact classification with hysteresis and a minimum dwell time.  Log both raw normal force and the filtered contact state; never infer contact only from foot height.
+2. Implement robust contact classification with hysteresis and a minimum dwell time, estimated from gait schedule, leg kinematics and IMU (the real robot has no foot force sensors).  The sim `ContactSensorCfg` feeds the same interface only as ground truth for comparison and logging; never infer contact only from foot height.
 3. Implement the independent-coordinate mapping for each parallelogram leg and tests that compare reconstructed passive angles with measured USD articulation angles.
 4. Add kinematics helpers for the sole frame, CoM, support polygon, stance/swing selection, and terrain height query.  Keep all tensor shapes explicit as `(num_envs, ...)` and define one frame convention for every vector.
 5. Add command and reference modules: constant velocity command, stop command, bounded yaw-rate command, phase-based alternating contact schedule, and swing-foot trajectories (quintic horizontal interpolation plus configurable clearance).
@@ -56,43 +76,43 @@ Use a two-level controller rather than a single full-body nonlinear MPC initiall
 
 **Exit criteria:** visualized/logged reference feet alternate correctly; state and reference unit tests pass for single- and multi-environment batches.
 
-## Phase 2 — Centroidal MPC
+## Phase 2 — DCM MPC
 
-1. Define the reduced state as CoM position/velocity and angular momentum (or centroidal momentum), with each contacting foot wrench as the control.  Use the robot mass and gravity from the verified model.
-2. Formulate a finite-horizon, multiple-shooting OCP with a 0.01--0.02 s node interval and an initial 0.5--1.0 s horizon.  Warm-start each solve by shifting the prior solution.
-3. Penalize velocity/yaw tracking, CoM reference error, angular momentum, foot-wrench magnitude/rate, and terminal state error.  Expose weights through a versioned configuration file rather than hard-coding them.
-4. Add hard constraints: normal force non-negativity and maximum, linearized friction cone, center-of-pressure bounds within the foot sole, zero wrench for swing feet, conservative CoM/base-height bounds, and optional wrench-rate limits.
-5. Generate a contact schedule parameter per horizon node; use double support around contact transitions.  On solver failure or deadline miss, hold the last feasible wrench for one tick and transition to a safe stand controller after a bounded number of failures.
-6. Write an offline deterministic test harness using recorded Isaac Lab states.  Test solver feasibility for standing, left/right single support, and a low-speed walk before connecting the optimizer to live simulation.
+1. Model: LIPM with constant CoM height, `omega = sqrt(g / h)`, DCM `xi = c + c_dot / omega`, exact discretisation `xi[k+1] = e^(omega*dt) xi[k] + (1 - e^(omega*dt)) p[k]`.  Use the robot mass and CoM height from the verified model.
+2. Decision variables: ZMP `p[k]` over the horizon (start: 0.02 s nodes, 0.5 s horizon for standing; about 1 s / two steps for walking).  From stage 3 add the next footstep positions and the current step duration (via `sigma = e^(-omega*T)` to stay a QP).
+3. Cost: DCM/velocity tracking, ZMP near the sole centre, ZMP rate, footstep deviation from nominal, step duration deviation from nominal.  Expose weights through a versioned configuration file rather than hard-coding them.
+4. Hard constraints: ZMP inside the support polygon (hull of both soles in double support, stance sole in single support), footstep reachability and minimum lateral spacing, step-duration bounds derived from servo speed limits, and a terminal DCM (capturability) constraint.
+5. Re-solve every control tick from the measured DCM; apply only the first ZMP and integrate it to the next CoM reference.  On solver failure, reuse the shifted previous solution for one tick and enter `safe_stop` after a bounded number of failures.
+6. Write an offline deterministic test harness using recorded Isaac Lab states.  Test feasibility for standing, pushes of known impulse, stepping in place and slow walking before connecting to live simulation.
 
-**Exit criteria:** solves meet the control deadline on the target machine, respect all force/friction constraints, and track a standing and low-speed walking reference in the offline harness.
+**Exit criteria:** solves meet the 5 ms control deadline, the ZMP stays inside the support polygon, and the offline harness recovers pushes whose DCM stays inside the support polygon.
 
-## Phase 3 — Whole-body controller and Isaac Lab actuation
+## Phase 3 — IK and Isaac Lab position actuation
 
-1. Implement a constrained inverse-dynamics QP over generalized accelerations, actuated torques, and contact forces.  Include floating-base rigid-body dynamics, stance-foot acceleration constraints, joint acceleration/torque bounds, friction constraints, and passive-joint handling consistent with the four-bar mechanism.
-2. Track, in priority/weighted form: MPC net wrench and CoM acceleration, stance-foot stationarity, swing-foot trajectory, torso orientation, nominal posture, and low arm/head motion.  During initial walking, hold arms and head at safe poses.
-3. Map WBC output to Isaac Lab.  Prefer `JointEffortActionCfg` for independently actuated joints when simulator dynamics and actuator models support it; otherwise use explicitly documented impedance targets plus feed-forward torque.  Never command the four passive linkage joints.
-4. Add torque, torque-rate, velocity, joint-position, base-tilt, base-height, and contact-loss safety guards.  Clamp commands before writing them to the simulator and report which guard triggered.
+1. Implement a kinematic IK QP (Pinocchio model in independent coordinates via the linear parallelogram coupling) over joint velocities, integrated to joint position targets.
+2. Track, in priority/weighted form: CoM reference, stance-foot stationarity, swing-foot trajectory (5-D, no foot pitch), torso orientation via `torso_pitch_joint`, nominal posture, and low arm/head motion.  Hold arms and head at safe poses until the arm-swing stage.
+3. Send the IK output through `JointPositionActionCfg`; the `DCMotorCfg` stiffness/damping model the Dynamixel position loop and should be identified from the register gains used on the real robot.  Never command the four passive linkage joints.
+4. Because mode 3 has no current limit, add software guards: joint-position clamps, joint-velocity limits, per-tick target-jump limits, base-tilt, base-height and contact-loss checks.  Clamp commands before writing them and report which guard triggered.
 5. Implement controller modes: `reset`, `stand`, `walk`, `recover`, and `safe_stop`.  Require a verified stable stand before allowing walk; a fall, persistent solver failure, or invalid state must enter `safe_stop` and reset the environment.
 
-**Exit criteria:** stand controller holds the robot under small pushes; WBC tracks a swing foot without sliding the stance foot; no commands are sent to passive joints.
+**Exit criteria:** the stabilizer holds the robot under small pushes; IK tracks a swing foot without sliding the stance foot; no commands are sent to passive joints.
 
 ## Phase 4 — Closed-loop gait progression
 
-1. Integrate scheduler, centroidal MPC, WBC, and environment in a single `MpcHumanoidController` called at the configured decimated control rate.  Keep a pure-Python offline mode and a live Isaac Lab mode behind the same API.
-2. Tune in this order: static double support, weight shifts, single-leg swing in place, slow stepping, low-speed forward walking, lateral velocity, yaw turns, stop/start transitions, then recovery pushes.
+1. Integrate scheduler, DCM MPC, IK, and environment in a single `MpcHumanoidController` called at the configured decimated control rate.  Keep a pure-Python offline mode and a live Isaac Lab mode behind the same API.
+2. Follow the stages in *Current roadmap*: stabilizer, stepping in place, fast walking without arm swing, fast walking with arm swing.  Within walking, tune slow forward walking, then lateral velocity, yaw turns, stop/start transitions and recovery pushes.
 3. Use a curriculum in command magnitude and perturbation strength.  Do not increase speed until the previous stage meets its quantitative criteria over multiple randomized resets.
-4. Record episodes in structured logs (configuration hash, seed, physics dt, state, contact state, MPC status/solve time/cost, planned wrenches, WBC residuals, actions, and termination reason).  Add an optional visualization of planned CoM and foot placements.
+4. Record episodes in structured logs (configuration hash, seed, physics dt, state, contact state, measured vs planned ZMP, MPC status/solve time/cost, planned footsteps, IK residuals, actions, and termination reason).  Add an optional visualization of planned CoM, ZMP and foot placements.
 
-**Exit criteria:** repeatable 0.1--0.2 m/s straight walking for a predefined duration and reset set without falls, deadline misses, or safety-guard violations.
+**Exit criteria:** repeatable 0.3--0.4 m/s straight walking for a predefined duration and reset set without falls, deadline misses, or safety-guard violations, and push recovery by stepping.
 
 ## Phase 5 — Validation, robustness, and sim-to-real preparation
 
 1. Create automated regression scenarios: stand, zero-velocity command, forward/lateral/yaw commands, abrupt stop, low-friction ground, small height variations, impulse pushes, delayed/noisy state estimates, and contact-sensor noise.
-2. Define success metrics: fall rate, distance/time before failure, velocity RMSE, stance-foot slip, peak torque/velocity, friction violations, MPC/WBC feasible-solve rate, p50/p95 solve latency, and safety-stop count.
+2. Define success metrics: maximum recoverable push impulse per direction, fall rate, distance/time before failure, velocity RMSE, stance-foot slip, peak joint torque/velocity, MPC/IK feasible-solve rate, p50/p95 solve latency, and safety-stop count.
 3. Add randomized but bounded mass, CoM, joint damping/friction, actuator strength/latency, contact friction, and sensor noise.  Keep nominal performance and robust performance as separate reports.
-4. Compare centroidal MPC/WBC against a standing-PD baseline and the existing RL reference only as benchmarks; do not mix their controllers in the first MPC evaluation.
-5. Before hardware, replace simulator-only state inputs with an estimator interface, calibrate encoder zero offsets and joint/foot frames, validate torque/current conversions and Dynamixel limits, add an independent emergency-stop path, and start with a tethered standing test.  Hardware actuation is out of scope until these checks are approved.
+4. Compare the DCM MPC against a standing-PD baseline and the existing RL reference only as benchmarks; do not mix their controllers in the first MPC evaluation.
+5. Before hardware, replace simulator-only state inputs with an estimator interface, calibrate encoder zero offsets and joint/foot frames, identify the Dynamixel position-loop response (gains, latency) and limits, add an independent emergency-stop path, and start with a tethered standing test.  Hardware actuation is out of scope until these checks are approved.
 
 ## Proposed repository changes
 
@@ -107,8 +127,8 @@ source/MPC_Humanoid/MPC_Humanoid/
     state.py                            # Isaac Lab state adapter
     contacts.py                         # contact filtering and schedules
     references.py                       # command, footsteps, swing trajectories
-    centroidal.py                       # acados OCP and warm-start policy
-    whole_body_qp.py                    # inverse-dynamics QP
+    dcm_mpc.py                          # DCM MPC QP (ZMP, footsteps, step timing)
+    ik.py                               # kinematic IK QP -> joint position targets
     controller.py                       # modes, rate scheduling, fallbacks
     logging.py                           # episode diagnostics
 scripts/
@@ -118,8 +138,8 @@ tests/
   test_model_spec.py
   test_parallelogram_mapping.py
   test_contacts.py
-  test_centroidal_mpc.py
-  test_whole_body_qp.py
+  test_dcm_mpc.py
+  test_ik.py
   test_mpc_integration.py
 ```
 
@@ -129,7 +149,9 @@ Keep the generated cart-pole configuration isolated until the Robinion task is r
 
 1. ~~Confirm the physical motor assignment for the thigh stage~~ -- resolved: 5 motors/leg (hip yaw, hip roll, hip pitch = `front_thigh_pitch`, ankle pitch, ankle roll), `front_shin_pitch` is passive not `ankle_pitch`; the left/right front-thigh effort asymmetry (9.9 vs 19.8 N·m) in the URDF is confirmed real, not a typo -- both per user confirmation, see `references/docs/joint_info.md`.
 2. ~~Measure and confirm the real effective parallelogram link length~~ -- resolved: use the URDF value of 0.20 m (user decision); the 0.18 m in the IK reference script is not used.
-3. Confirm the intended low-level hardware command mode: current/torque, position with current limit, or position-only.  This determines whether the hardware-facing WBC emits torque or impedance targets.
-4. Select the initial walking target (recommended: flat ground, 0.1 m/s forward, no arm swing) and the target compute hardware/deadline.
+3. ~~Confirm the intended low-level hardware command mode~~ -- resolved: Dynamixel position control (mode 3, no current limit); the controller emits joint position targets (user decision).
+4. ~~Select the initial walking target~~ -- resolved: flat ground, staged per *Current roadmap* up to 0.3--0.4 m/s with push recovery (user decision).  Still open: target compute hardware and deadline.
+5. ~~Foot sole dimensions~~ -- resolved: take them from the CAD (foot collision geometry) for the ZMP constraints (user decision).
+6. ~~Foot sensors~~ -- resolved: the real robot has no foot force/contact sensors; contact is estimated and there is no measured CoP/ZMP (user decision).
 
 Until these are resolved, use conservative simulator-only limits, document them as assumptions, and keep all values configurable.

@@ -128,7 +128,7 @@ Keep the generated cart-pole configuration isolated until the Robinion task is r
 ## Decisions required before implementation
 
 1. ~~Confirm the physical motor assignment for the thigh stage~~ -- resolved: 5 motors/leg (hip yaw, hip roll, hip pitch = `front_thigh_pitch`, ankle pitch, ankle roll), `front_shin_pitch` is passive not `ankle_pitch`; the left/right front-thigh effort asymmetry (9.9 vs 19.8 N·m) in the URDF is confirmed real, not a typo -- both per user confirmation, see `references/docs/joint_info.md`.
-2. Measure and confirm the real effective parallelogram link length (the URDF says 0.20 m while the IK reference uses 0.18 m).
+2. ~~Measure and confirm the real effective parallelogram link length~~ -- resolved: use the URDF value of 0.20 m (user decision); the 0.18 m in the IK reference script is not used.
 3. Confirm the intended low-level hardware command mode: current/torque, position with current limit, or position-only.  This determines whether the hardware-facing WBC emits torque or impedance targets.
 4. Select the initial walking target (recommended: flat ground, 0.1 m/s forward, no arm swing) and the target compute hardware/deadline.
 

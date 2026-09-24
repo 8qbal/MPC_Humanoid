@@ -1,15 +1,24 @@
-# AGENTS.md
+# CLAUDE.md
 
-Instructions for AI coding agents (Codex, etc.) working in this repository.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## What this project is
 
 An Isaac Lab external project: an installable Python package (`source/MPC_Humanoid`)
 plus assets and reference material for **Robinion**, a Dynamixel-actuated humanoid
-with parallelogram-linkage legs. The long-term goal is an MPC-controlled robot. The
-current phase is to build a correct, high-fidelity real-to-sim model first: an
-MPC/RL-ready `ArticulationCfg` (`source/MPC_Humanoid/MPC_Humanoid/robots/robonionv2.py`)
-backed by a USD asset that matches the robot's URDF/CAD exactly.
+with parallelogram-linkage legs. The long-term goal is an MPC-controlled robot (see
+`plan.md` for the full phased plan). The current phase is to build a correct,
+high-fidelity real-to-sim model first: an MPC/RL-ready `ArticulationCfg`
+(`source/MPC_Humanoid/MPC_Humanoid/robots/robonionv2.py`) backed by a USD asset that
+matches the robot's URDF/CAD exactly.
+
+## Working with the user
+
+Do not create files or write code on your own initiative. Discuss the approach with
+the user first and wait for their go-ahead before creating or editing any file. Then
+implement only what was agreed; `plan.md` is a roadmap, not permission to do the next
+items. Propose anything extra (helper modules, scripts, doc updates) in one sentence
+and let the user decide.
 
 ## Environment
 
@@ -34,14 +43,24 @@ backed by a USD asset that matches the robot's URDF/CAD exactly.
 ## Commands
 
 ```bash
-uv run isaaclab zero_agent --task <TASK_NAME>              # sanity-check an env
-uv run isaaclab train --rl_library <LIB> --task <TASK_NAME>
-uv run pre-commit run --all-files                           # lint/format (ruff, codespell, etc.)
+uv run isaaclab zero_agent --task <TASK_NAME> --num_envs 16   # sanity-check an env, no policy
+uv run isaaclab random_agent --task <TASK_NAME> --num_envs 16
+uv run isaaclab train --rl_library <RL_LIBRARY> --task <TASK_NAME>
+uv run isaaclab play --rl_library <RL_LIBRARY> --task <TASK_NAME> --checkpoint latest
+uv run isaaclab train_multigpu --rl_library <RL_LIBRARY> --task <TASK_NAME> --num_gpus 2
+uv run isaaclab benchmark runtime --task <TASK_NAME> --num_envs 16 --num_steps 1000
+uv run isaaclab benchmark training --rl_library <RL_LIBRARY> --task <TASK_NAME> --max_iterations 10
+uv run pre-commit run --all-files                              # lint/format (ruff, codespell, etc.)
+uv run python scripts/run_env.py --viz kit                    # load the Robinion MPC env and play it (headless without --viz)
 ```
+
+`physics=<PRESET>` selects one of the physics presets defined per task (e.g. the
+`MpcHumanoidPhysicsCfg` presets such as `newton_mjwarp` / `newton_kamino` / `physx`).
 
 Linting: `ruff` (line length 120, `E,F,I,UP,W`) + `ruff-format` + `codespell`, run
 via pre-commit. Match existing code style (docstrings, type hints, `from __future__
-import annotations`) rather than introducing a new one.
+import annotations`) rather than introducing a new one. There is no test suite yet;
+`plan.md`'s proposed layout adds one under `tests/` alongside the MPC modules.
 
 ## Comments
 
@@ -52,20 +71,58 @@ upstream bug, or a numeric value whose source (URDF field, datasheet, mesh
 computation) isn't otherwise documented nearby. Never comment on *what* the code
 does, restate the function/variable name, or leave narration of the current task.
 
+To configure VS Code (Pylance resolving simulator modules), run:
+```bash
+uv run python .vscode/tools/setup_vscode.py
+```
+If Pylance still can't resolve simulator modules after this, reload the window; if
+indexing uses too much memory, remove unused simulator extension paths from
+`.vscode/settings.json`.
+
 ## Repository layout
 
 ```
-source/MPC_Humanoid/MPC_Humanoid/   installable package: tasks, robot configs
+source/MPC_Humanoid/MPC_Humanoid/   installable package: robot config, env, mpc, RL tasks
 assets/                             USD assets actually loaded by ArticulationCfg
 references/                         URDF, CAD-derived docs, git submodules (IK, RL refs)
 scripts/                            run_env.py: load + play the env (not part of the package)
 tools/asset/                        URDF -> USD pipeline scripts (fix, flatten, check)
 outputs/                            scratch / generated output, not source of truth
+plan.md                             phased plan for the MPC controller (read before Phase work)
 ```
 
 `references/robinion_description` and the other `references/*` folders are **git
 submodules** (see `.gitmodules`) — treat their contents as upstream/generated, not
 project source to hand-edit, except where noted below.
+
+### Package architecture (`source/MPC_Humanoid/MPC_Humanoid/`)
+
+- `robots/robonionv2.py` — the single `ROBINION_CFG` `ArticulationCfg`: USD asset
+  path, initial pose, and per-actuator-group `DCMotorCfg`/`ImplicitActuatorCfg`
+  (legs, torso/arms, head, and the passive parallelogram joints). This is the one
+  source of truth every env/task imports the robot from.
+- `env/` — the plain (non-RL) `ManagerBasedEnvCfg` that the MPC controller will
+  drive directly (`MpcHumanoidRobinionEnvCfg` in `robinion_env_cfg.py`): scene
+  (ground + `ROBINION_CFG` + light), an `ActionsCfg` (joint-effort passthrough over
+  the actuated joints only), and an `ObservationsCfg` with a single `state` group
+  (base lin/ang vel, projected gravity, relative joint pos/vel). Not gym-registered
+  — there is no training loop here, so it stays a `ManagerBasedEnvCfg`, not
+  `ManagerBasedRLEnvCfg`. `observations` and `actions` are required (`MISSING`) on
+  the base class, so any env cfg here must define both.
+- `mpc/` — the controller stack from `plan.md`'s architecture (currently only
+  `controller.py`'s `MpcHumanoidController`/`ControllerMode` placeholder; state,
+  contact, reference, centroidal-MPC, and whole-body-QP modules land per-phase).
+  Kept independent of `tasks/` — it's a plain module, not an RL task.
+- `tasks/mpc_humanoid/` — Isaac Lab's generated RL-task tree (gym-registered,
+  manager-based, `config/<variant>/` + shared `mdp/`). Currently only holds the
+  generated cart-pole placeholder task (`config/cartpole/`); per `plan.md` Phase 0,
+  keep it isolated until a real Robinion RL/benchmark task is registered here, then
+  retire it so it can't be run by accident as the humanoid task. **Don't put the MPC
+  controller or its non-RL env here** — this tree is specifically for gym-registered
+  RL tasks with reward/termination managers.
+
+Never conflate `robots/` (asset + actuator config) with the USD asset's raw
+inertial/collision data — `robonionv2.py` deliberately keeps them separate.
 
 ## The URDF → USD pipeline (assets/robonionv2.usd)
 

@@ -13,8 +13,8 @@ Double-support standing controller that recovers from pushes without stepping.  
 
 | Symbol | Code name | Dim | Unit | Source |
 |---|---|---|---|---|
-| `q_a` | `q_act` | 22 | rad | encoders; env obs `joint_pos_rel` + `q_default` |
-| `q̇_a` | `qd_act` | 22 | rad/s | encoders; env obs `joint_vel_rel` |
+| `q_a` | `q_act` | 21 | rad | encoders; env obs `joint_pos_rel` + `q_default` |
+| `q̇_a` | `qd_act` | 21 | rad/s | encoders; env obs `joint_vel_rel` |
 | `quat` | `imu_quat_xyzw` | 4 (x, y, z, w) | — | AHRS orientation of `imu_link` (MTi-630); env obs `imu_orientation`, normalised before use |
 | `ω_I` | `gyro` | 3 | rad/s | gyro in the `imu_link` frame (MTi-630); env obs `imu_ang_vel` |
 
@@ -35,13 +35,13 @@ Double-support standing controller that recovers from pushes without stepping.  
 | `c_ref` | `c_ref` | 2 | m | [C] | CoM reference for the next tick |
 | `ċ_ref` | `cdot_ref` | 2 | m/s | [C] | CoM velocity reference for the next tick |
 | `v` | `v` | 6 + 11 | m/s, rad/s | [D] | IK velocity: base twist + leg (10) and torso (1) joint velocities |
-| `q_des` | `q_des` | 22 | rad | [D], [E] | joint position targets |
+| `q_des` | `q_des` | 21 | rad | [D], [E] | joint position targets |
 
 ### Output
 
 | Symbol | Code name | Dim | Unit | Destination |
 |---|---|---|---|---|
-| `q_des − q_default` | `action` | 22 | rad | env action term `joint_pos` (`JointPositionActionCfg`, `use_default_offset=True`) |
+| `q_des − q_default` | `action` | 21 | rad | env action term `joint_pos` (`JointPositionActionCfg`, `use_default_offset=True`) |
 
 ### Parameters
 
@@ -49,8 +49,8 @@ Double-support standing controller that recovers from pushes without stepping.  
 |---|---|---|---|---|
 | `g` | `g` | 9.81 | m/s² | |
 | `m` | `mass` | 7.9325 | kg | total mass of `assets/robonionv2_controller.urdf` (= USD, after the fixes) |
-| `h` | `h` | ≈ 0.50 | m | CoM height above the sole at the standing pose, from FK of the controller model |
-| `ω` | `omega` | `sqrt(g / h)` ≈ 4.4 | rad/s | |
+| `h` | `h` | 0.480 | m | CoM height above the sole at the standing pose (straight legs), from FK of the controller model |
+| `ω` | `omega` | `sqrt(g / h)` ≈ 4.52 | rad/s | |
 | `dt` | `dt` | 0.005 | s | sim dt 1 ms × decimation 5 |
 | `Δ` | `dt_mpc` | 0.02 | s | MPC node interval |
 | `N` | `horizon` | 25 | — | 0.5 s horizon |
@@ -92,7 +92,7 @@ v    = [ 0 ; ω_B ; G q̇_a ]                               base linear velocity
 ω_B  : solved from ω_I = J_I,ang v                       (J_I = LOCAL Jacobian of imu_link; removes the torso-pitch rate)
 ċ    = lowpass( [ J_com − (J_oL + J_oR) / 2 ]_xy v , f_c )
 J_o  = J_lin − [R s]× J_ang                              (sole-centre point Jacobian, LOCAL_WORLD_ALIGNED, s = sole_centre)
-ξ    = c + ċ / ω,     ω = sqrt(g / max(h_c, h_min))
+ξ    = c + ċ / ω                                         ω = sqrt(g / h), the same constant as [B] and [C]
 fallen = h_c < h_min
 ```
 
@@ -125,10 +125,16 @@ c_ref⁺ = p₀ + (c_ref − p₀) cosh(ω dt) + (ċ_ref / ω) sinh(ω dt)
 ```text
 min_v   Σ_i w_i ‖J_i G v − (K_i e_i + ẋ_i_ref)‖² + λ ‖v‖²
 tasks:  left/right sole fixed (5-D each, no pitch), CoM xy → c_ref / ċ_ref,
-        pelvis height → h, torso upright (torso_pitch); arms and head held at q_default
+        CoM height → h, pelvis upright (roll, pitch, yaw → 0), torso_pitch → q_default;
+        arms and head held at q_default
 s.t.    q_min ≤ q + q̇ dt ≤ q_max,   |q̇| ≤ q̇_max
 q_des⁺ = q_des + q̇ dt
 ```
+
+The 21 actuated joints are legs 10, torso 1, arms 8, head 2; the IK moves only the legs and the torso.
+
+- **Pelvis upright.** Sole pitch always equals pelvis pitch through the two parallelograms, so the 5-D sole tasks leave pelvis pitch free; without this task the IK could tilt the pelvis and both soles together (toes or heels lifting on the real robot).  Roll and yaw keep the upper body level and facing forward.
+- **CoM height, low weight.** `h` is a CoM height, so the height task holds the CoM (not the pelvis) at `h`, matching the constant-height LIPM.  At the straight-leg default pose (`_LEG_CROUCH = 0` in `robots/robonionv2.py`) the height is singular: bending the legs changes it only to second order.  Its weight is kept low (0.1 against 10 for CoM xy) so the IK does not chase an unreachable height with large joint velocities; the CoM drops ≈ 1.3 mm when it shifts ≈ 3 cm.  A crouched default pose would make the height controllable.
 
 ### [E] Safety
 

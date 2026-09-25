@@ -43,6 +43,7 @@ from isaaclab.envs import ManagerBasedEnv
 
 from MPC_Humanoid.env import MpcHumanoidRobonionEnvCfg
 from MPC_Humanoid.mpc.estimator import GRAVITY, PASSIVE_COUPLING, SOLE_CENTRE, StabilizerEstimator
+from MPC_Humanoid.mpc.ik import StabilizerIK
 
 
 def quat_to_R(q_xyzw: np.ndarray) -> np.ndarray:
@@ -70,7 +71,9 @@ def main() -> None:
     starts = np.cumsum([0] + dims)
     obs_slice = {t: slice(starts[i], starts[i + 1]) for i, t in enumerate(terms)}
 
-    estimator = StabilizerEstimator(act_names, dt=env.step_dt)
+    default_q = robot.data.default_joint_pos.torch[0].cpu().numpy()
+    omega = math.sqrt(GRAVITY / StabilizerIK(act_names, default_q[act_ids], env.step_dt).com_height)
+    estimator = StabilizerEstimator(act_names, dt=env.step_dt, omega=omega)
 
     passive_pairs = [
         (joint_names.index(f"{side}_{p}"), joint_names.index(f"{side}_{a}"), gain)
@@ -80,7 +83,6 @@ def main() -> None:
     feet = [body_names.index(f"{side}_foot_roll_link") for side in ("left", "right")]
     root = body_names.index("lower_body_link")
     torso = body_names.index("upper_body_link")
-    default_q = robot.data.default_joint_pos.torch[0].cpu().numpy()
     mass = robot.data.body_mass.torch[0].cpu().numpy()
 
     obs, _ = env.reset()
@@ -127,7 +129,7 @@ def main() -> None:
         yaw = math.atan2(R_root[1, 0], R_root[0, 0])
         R_yaw = np.array([[math.cos(yaw), math.sin(yaw)], [-math.sin(yaw), math.cos(yaw)]])
         c_true = R_yaw @ (com_w - 0.5 * (soles[0] + soles[1]))[:2]
-        xi_true = c_true + R_yaw @ comd_w[:2] / math.sqrt(GRAVITY / est.com_height)
+        xi_true = c_true + R_yaw @ comd_w[:2] / omega
         rows.append((t, est.c, c_true, est.xi, xi_true))
 
         if step % int(0.1 / env.step_dt) == 0:

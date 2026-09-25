@@ -61,7 +61,7 @@ class StabilizerEstimator:
         self,
         actuated_joint_names: list[str],
         dt: float,
-        omega: float | None = None,
+        omega: float,
         vel_cutoff: float = 50.0,
         min_com_height: float = 0.25,
         urdf_path: str = CONTROLLER_URDF,
@@ -85,6 +85,10 @@ class StabilizerEstimator:
         self._imu = self.model.getFrameId("imu_link")
         self._feet = [self.model.getFrameId(f"{side}_foot_roll_link") for side in ("left", "right")]
         self._cdot = np.zeros(2)
+
+    def reset(self):
+        """Clear the CoM-velocity low-pass state; call on every env reset."""
+        self._cdot[:] = 0.0
 
     def full_configuration(self, q_act: np.ndarray, base_rotation: np.ndarray = np.eye(3)) -> np.ndarray:
         """
@@ -148,7 +152,6 @@ class StabilizerEstimator:
         # When the robot falls the feet-flat model puts the CoM near or below the soles.
         com_height = float(com[2] - origin[2])
         fallen = com_height < self.min_com_height
-        omega = self.omega if self.omega is not None else math.sqrt(GRAVITY / max(com_height, self.min_com_height))
         return EstimatorState(
-            c=c, cdot=self._cdot.copy(), xi=c + self._cdot / omega, com_height=com_height, fallen=fallen
+            c=c, cdot=self._cdot.copy(), xi=c + self._cdot / self.omega, com_height=com_height, fallen=fallen
         )

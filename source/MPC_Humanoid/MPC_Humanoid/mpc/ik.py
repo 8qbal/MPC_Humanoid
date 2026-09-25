@@ -28,8 +28,6 @@ IK_JOINTS = (
     ".*_ankle_roll_joint",
     "torso_pitch_joint",
 )
-# World-frame rows of a sole twist that are tracked. Sole pitch always equals pelvis
-# pitch through the parallelograms, so it is left to the pelvis task.
 SOLE_ROWS = [0, 1, 2, 3, 5]
 
 

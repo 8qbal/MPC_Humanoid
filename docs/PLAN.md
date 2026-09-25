@@ -28,6 +28,44 @@ Stages, each built on the previous one:
 
 Success metrics: maximum recoverable push impulse (N·s) per direction, velocity RMSE, falls per 100 pushes, no servo hitting its velocity limit.
 
+### Stage 1 status: implemented, not yet stable in simulation
+
+All five blocks of `docs/stabilizer.md` are implemented in `source/MPC_Humanoid/MPC_Humanoid/mpc/` and run by `scripts/run_stabilizer.py`: [A] `estimator.py`, [B] `dcm_mpc.py`, [C] + [E] `controller.py` (`StabilizerController`), [D] `ik.py`.  One tick takes ≈ 0.4 ms of the 5 ms budget.
+
+| Part | Verified | Result |
+|---|---|---|
+| [A] estimator | Isaac, 1 N·s pushes (`scripts/check_estimator.py`) | push peak of `ξ` within 2.2 mm of truth; constant `c` offset ≈ 4 mm from the AHRS bias; parallelogram coupling error ≤ 0.02° |
+| [B] DCM MPC | LIPM only, 200 Hz | `ξ` returns to the reference, ZMP bounds always met, per-node bounds switch the support polygon |
+| [C]–[E] chain | offline, ideal servos (joint positions = targets) | CoM converges smoothly, soles drift 0.00 mm |
+| Whole stabilizer | Isaac (CPU PhysX) | **fails:** oscillates while standing and enters `safe_stop` within 0.7 s |
+
+Baseline without a controller (servos hold the default pose): 1 N·s pushes are absorbed; from ≈ 1.5 N·s along y the unloaded foot loses contact and slides (17.6 mm at 1.5 N·s, 41 mm at 2.0 N·s); 3 N·s falls in both x and y.
+
+What was ruled out:
+- Blending the measured and model DCM (`ξ_mpc = ξ_model + K (ξ_meas − ξ_model)`): K ≥ 0.6 falls, K ≤ 0.3 stands but resists pushes no better than the baseline.
+- Servo compliance alone: raising the servo stiffness from 42 to 400 N·m/rad still ends in `safe_stop` within 1 s.
+- Estimator error: during the oscillation the estimated `c` and `ċ` match the simulator truth (mostly within 10 mm/s).
+
+Cause, from the measured response of the real CoM to the IK CoM command (MPC off, servo stiffness 42 N·m/rad):
+
+| | x | y |
+|---|---|---|
+| 10 mm step: 50 % delay / overshoot / final value | 95 ms / 25 % / 116 % | 100 ms / 35 % / 118 % |
+| 5 mm sine, gain (phase) at 0.3 Hz | 1.18 (−6°) | 1.20 (−6°) |
+| at 1.0 Hz | 1.39 (−26°) | 1.46 (−28°) |
+| at 1.5 Hz (resonance) | 1.59 (−53°) | 1.95 (−84°) |
+| at 3.0 Hz | 0.57 (−139°) | 0.46 (−150°) |
+
+The robot behaves like ≈ 60 ms delay, ≈ 17 % static over-travel (the compliant servos sag towards the lean) and a lightly damped resonance near 1.7 Hz.  The DCM loop needs a feedback gain above 1 around ω ≈ 0.7 Hz, where the robot already amplifies 1.3–2× with 25–85° lag, so the loop in `docs/stabilizer.md` (measured `ξ` fed straight into [B], `c_ref` integrated from the model) is unstable.  A stiffer servo shifts the resonance and delay but does not remove them.
+
+Next steps:
+1. Fit a plant model from the table above (gain, resonance, delay) and simulate the stabilizer against it in plain Python to choose a stable DCM feedback gain; test gyro damping of the 1.7 Hz resonance and a 1/1.17 static correction.
+2. Verify the chosen design in Isaac with `scripts/run_stabilizer.py`, then update `controller.py` and `docs/stabilizer.md`.
+3. Start from the standing CoM (x ≈ −27 mm) and ramp `ξ_ref` to the sole centre instead of stepping it, which currently kicks the ZMP to −66 mm on the first tick.
+4. On hardware, identify the Dynamixel position-loop response (stiffness, delay) so the sim actuator model and the gains are not tuned to a guess.
+
+Tests so far ran on CPU PhysX (the GPU driver was unavailable); results on GPU may differ slightly.
+
 ## Architecture
 
 ```text

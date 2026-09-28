@@ -10,13 +10,15 @@ The controller must respect the robot's floating base, contact forces, actuator 
 
 Target: fast (0.3--0.4 m/s), reasonably natural walking that stays stable under pushes, with MPC as the only control law (no RL).  Servos run in Dynamixel position mode (mode 3), so the controller outputs joint position targets.  The robot has no foot force/contact sensors, in hardware or in simulation.
 
-The core controller is a DCM MPC re-solved every control tick (200 Hz) from the measured state, so it acts as both planner and stabilizer:
+The core controller is an NMPC on a rigid-contact floating-base model, re-solved every control tick (200 Hz) from the estimated state; it outputs the servo targets directly (design D in [`docs/stage1.md`](stage1.md)):
 
 ```text
-estimator -> c, c_dot, xi = c + c_dot / omega
-  -> DCM MPC (ZMP, later footstep position and timing)
-  -> CoM reference -> IK (Pinocchio + parallelogram coupling) -> q_des -> JointPositionAction
+encoders + AHRS + gyro -> contact mode per foot (no contact sensing) -> floating-base state
+  -> NMPC (rigid contacts, contact plan over the horizon; later footsteps and step timing)
+  -> q_des -> JointPositionAction
 ```
+
+The original plan was a DCM MPC + IK chain (design A); it is unstable with the compliant position-mode servos, see *Design A analysis* below.
 
 Stages, each built on the previous one:
 
@@ -28,13 +30,30 @@ Stages, each built on the previous one:
 
 Success metrics: maximum recoverable push impulse (N·s) per direction, velocity RMSE, falls per 100 pushes, no servo hitting its velocity limit.
 
-### Stage 1 status: implemented, not yet stable in simulation
+### Stage 1 status: done (design D)
 
-All five blocks of `docs/stabilizer.md` are implemented in `source/MPC_Humanoid/MPC_Humanoid/mpc/` and run by `scripts/run_stabilizer.py`: [A] `estimator.py`, [B] `dcm_mpc.py`, [C] + [E] `controller.py` (`StabilizerController`), [D] `ik.py`.  One tick takes ≈ 0.4 ms of the 5 ms budget.
+Full record of everything tried, with numbers: [`docs/stage1.md`](stage1.md).  Designs A (DCM MPC + LIPM + IK), B (NMPC on a flat-foot reduced model) and C (NMPC on a soft-contact model) stood at best as well against pushes as the passive robot.  Design D, an NMPC on a rigid-contact floating-base model with a contact mode per foot, is in the package (`source/MPC_Humanoid/MPC_Humanoid/mpc/`, run by `scripts/run_stabilizer.py`).  It runs only while both soles are flat and holds the servo targets while a sole rolls on an edge or a foot is in the air, where the passive robot recovers better than the NMPC.  Single-push table in Isaac (GPU PhysX, one env per process):
+
+| Push (N·s) | +x 2.5 | +x 3.0 | +x 3.5 | −x 1.75 | −x 2.0 | −x 2.5 | +y 2.0 | +y 2.5 | −y 2.25 | −y 2.5 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| passive | ok | fall | fall | fall | fall | fall | ok | fall | fall | fall |
+| design D | ok | fall | fall | **ok** | **ok** | fall | ok | fall | ok (43° sole tilt, marginal) | fall |
+
+Never worse than the passive robot, better in two to three cases; larger pushes need stepping (stage 2 on).  The model, the contact-mode monitor and the estimator carry over to stage 2.  Open: one tick takes ≈ 3.8 ms of NMPC solve plus ≈ 3.3 ms of parameter preparation in Python, above the 5 ms tick and far from the Jetson AGX Orin budget.
+
+### Stage 2 status: done (stepping in place)
+
+Full record: [`docs/stage2.md`](stage2.md).  One layer: the design-D NMPC with a contact plan from a gait scheduler (T_ss 0.3 s, T_ds 0.1 s, 2 cm clearance, 0.2 rad crouch), a closed-form DCM reference and a swing spline as cost references (`mpc/gait.py`, `mpc/gait_nmpc.py`, `mpc/stepping.py`, `scripts/run_stepping.py`).  In Isaac, with the estimator only: 20 steps at 2 and 3 cm without a fall; early and late touchdowns retime the plan (±5 mm of ground-height error handled); one tick ≈ 4.3 ms on the desktop (compiled contact algebra and estimation, split RTI, 16 nodes), measurement-to-target latency ≈ 1.3 ms.  Pushes in the middle of single support (3 noise seeds): stepping resumes after +1.75 / −1.0 N·s sagittal (−1.75 in 2 of 3) and ±0.5 / +1.0 N·s lateral; lateral push recovery needs footstep adaptation (stage 3).  Open: Jetson timing, hardware check of the contact-mode monitor, ≈ 0.3 mm forward landing drift per step.
+
+### Design A analysis (historical)
+
+Design A was removed from the package; the code is in the git history before design D was moved in.
+
+All five blocks of design A were implemented in `source/MPC_Humanoid/MPC_Humanoid/mpc/` and run by `scripts/run_stabilizer.py`: [A] `estimator.py`, [B] `dcm_mpc.py`, [C] + [E] `controller.py` (`StabilizerController`), [D] `ik.py`.  One tick took ≈ 0.4 ms of the 5 ms budget.
 
 | Part | Verified | Result |
 |---|---|---|
-| [A] estimator | Isaac, 1 N·s pushes (`scripts/check_estimator.py`) | push peak of `ξ` within 2.2 mm of truth; constant `c` offset ≈ 4 mm from the AHRS bias; parallelogram coupling error ≤ 0.02° |
+| [A] estimator | Isaac, 1 N·s pushes (`scripts/check_estimator.py`, removed with design A) | push peak of `ξ` within 2.2 mm of truth; constant `c` offset ≈ 4 mm from the AHRS bias; parallelogram coupling error ≤ 0.02° |
 | [B] DCM MPC | LIPM only, 200 Hz | `ξ` returns to the reference, ZMP bounds always met, per-node bounds switch the support polygon |
 | [C]–[E] chain | offline, ideal servos (joint positions = targets) | CoM converges smoothly, soles drift 0.00 mm |
 | Whole stabilizer | Isaac (CPU PhysX) | **fails:** oscillates while standing and enters `safe_stop` within 0.7 s |
@@ -56,15 +75,11 @@ Cause, from the measured response of the real CoM to the IK CoM command (MPC off
 | at 1.5 Hz (resonance) | 1.59 (−53°) | 1.95 (−84°) |
 | at 3.0 Hz | 0.57 (−139°) | 0.46 (−150°) |
 
-The robot behaves like ≈ 60 ms delay, ≈ 17 % static over-travel (the compliant servos sag towards the lean) and a lightly damped resonance near 1.7 Hz.  The DCM loop needs a feedback gain above 1 around ω ≈ 0.7 Hz, where the robot already amplifies 1.3–2× with 25–85° lag, so the loop in `docs/stabilizer.md` (measured `ξ` fed straight into [B], `c_ref` integrated from the model) is unstable.  A stiffer servo shifts the resonance and delay but does not remove them.
+The robot behaves like ≈ 60 ms delay, ≈ 17 % static over-travel (the compliant servos sag towards the lean) and a lightly damped resonance near 1.7 Hz.  The DCM loop needs a feedback gain above 1 around ω ≈ 0.7 Hz, where the robot already amplifies 1.3–2× with 25–85° lag, so the loop of design A in `docs/stage1.md` (measured `ξ` fed straight into [B], `c_ref` integrated from the model) is unstable.  A stiffer servo shifts the resonance and delay but does not remove them.
 
-Next steps:
-1. Fit a plant model from the table above (gain, resonance, delay) and simulate the stabilizer against it in plain Python to choose a stable DCM feedback gain; test gyro damping of the 1.7 Hz resonance and a 1/1.17 static correction.
-2. Verify the chosen design in Isaac with `scripts/run_stabilizer.py`, then update `controller.py` and `docs/stabilizer.md`.
-3. Start from the standing CoM (x ≈ −27 mm) and ramp `ξ_ref` to the sole centre instead of stepping it, which currently kicks the ZMP to −66 mm on the first tick.
-4. On hardware, identify the Dynamixel position-loop response (stiffness, delay) so the sim actuator model and the gains are not tuned to a guess.
+Steps 1–3 of the earlier next-step list (plant fit, offline loop design, `ξ_ref` ramp) were done; see `docs/stage1.md`.  Still open: on hardware, identify the Dynamixel position-loop response (stiffness, delay) so the sim actuator model and the gains are not tuned to a guess.
 
-Tests so far ran on CPU PhysX (the GPU driver was unavailable); results on GPU may differ slightly.
+The analysis above ran on CPU PhysX; the later work in `docs/stage1.md` ran on GPU PhysX, one env per process.
 
 ## Architecture
 

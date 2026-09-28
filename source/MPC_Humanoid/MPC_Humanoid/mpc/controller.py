@@ -4,111 +4,119 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """
-Stage-1 stabilizer: double-support standing that recovers from pushes without
-stepping. Each tick runs estimator -> DCM MPC -> LIPM step -> IK -> safety and
-returns joint position targets for the actuated joints (see docs/stabilizer.md).
+Stage-1 standing controller (design D in docs/stage1.md).
+
+Every tick: AHRS/gyro -> contact modes (ContactModeMonitor) -> state (ContactProjectionEstimator) ->
+NMPC -> servo targets of the 9 model joints; the other actuated joints hold their defaults. The NMPC
+runs only while both soles are flat. When a sole rolls on an edge or a foot leaves the ground the servo
+targets are held: the robot then recovers better on its own than with the NMPC acting on a model that
+predicts those phases poorly.
 """
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 
 import numpy as np
 
-from .dcm_mpc import DcmMpc, DcmMpcSolution
-from .estimator import GRAVITY, EstimatorState, StabilizerEstimator
-from .ik import StabilizerIK
+from .estimator import AhrsGyro, ContactModeMonitor, ContactProjectionEstimator
+from .model import MODEL_JOINTS, RigidContactModel, contact_config
+from .nmpc import N_NODES, ContactNMPC
 
-# Hull of both soles in S at the standing pose, from the foot mesh *_foot_visual.stl and FK.
-ZMP_MIN = np.array([-0.0875, -0.0885])
-ZMP_MAX = np.array([0.0875, 0.0885])
+CALIBRATION_TIME = 0.5  # s standing still at the default pose to measure the AHRS bias
+RAMP_TIME = 1.0  # s to move the CoM target from the standing CoM to the sole centre
 
 
 @dataclass
-class StabilizerOutput:
-    q_des: np.ndarray
-    # Joint position targets for the actuated joints [rad].
-    est: EstimatorState
-    mpc: DcmMpcSolution | None
-    c_ref: np.ndarray
-    cdot_ref: np.ndarray
-    mode: str
-    # "stand" or "safe_stop".
-    recoverable: bool
-    # False when the measured DCM is outside the support polygon: needs a step.
+class ControllerStatus:
+    modes: list[str]
+    # contact mode per foot (left, right)
+    q: np.ndarray | None
+    qd: np.ndarray | None
+    # estimated model state; None during calibration
+    holding: bool
+    # servo targets held because a sole is not flat
+    solve_time: float | None
+    # NMPC solver time of this tick [s]
+    qp_status: int | None
 
 
-class StabilizerController:
-    def __init__(
-        self,
-        actuated_joint_names: list[str],
-        q_default_act: np.ndarray,
-        dt: float,
-        tilt_limit_deg: float = 20.0,
-        max_mpc_failures: int = 10,
-        soft_limit_factor: float = 0.9,
-    ):
+class StandingController:
+    def __init__(self, act_names: list[str], q_default_act: np.ndarray, dt: float, build: bool | None = None):
+        self.act_names = list(act_names)
+        self.q_default = np.asarray(q_default_act, dtype=float).copy()
         self.dt = dt
-        self.ik = StabilizerIK(actuated_joint_names, q_default_act, dt, soft_limit_factor=soft_limit_factor)
-        self.omega = math.sqrt(GRAVITY / self.ik.com_height)
-        self.estimator = StabilizerEstimator(actuated_joint_names, dt, self.omega)
-        self.mpc = DcmMpc(self.omega)
-        self.tilt_limit = math.radians(tilt_limit_deg)
-        self.max_mpc_failures = max_mpc_failures
+        self.ind = [self.act_names.index(n) for n in MODEL_JOINTS]
+        self.model = RigidContactModel(self.act_names, self.q_default)
+        self.ahrs = AhrsGyro(self.act_names)
+        self.monitor = ContactModeMonitor(self.model)
+        self.estimator = ContactProjectionEstimator(self.model)
+        self.nmpc = ContactNMPC(self.model, build=build)
+        self.reset()
 
-        joints = [self.ik.model.joints[self.ik.model.getJointId(n)] for n in actuated_joint_names]
-        idx_q = [j.idx_q for j in joints]
-        idx_v = [j.idx_v for j in joints]
-        lo, hi = self.ik.model.lowerPositionLimit[idx_q], self.ik.model.upperPositionLimit[idx_q]
-        mid, half = 0.5 * (lo + hi), 0.5 * (hi - lo) * soft_limit_factor
-        self._q_min, self._q_max = mid - half, mid + half
-        self._qd_max = self.ik.model.velocityLimit[idx_v]
-        self.reset(q_default_act)
-
-    def reset(self, q_act: np.ndarray):
-        self.ik.reset(q_act)
+    def reset(self):
+        """Call on every env reset."""
+        self.t = 0.0
+        self.q_des = self.q_default.copy()
+        self.u = self.q_default[self.ind].copy()
+        self.monitor.reset()
         self.estimator.reset()
-        self.c_ref = self.ik.com[:2].copy()
-        self.cdot_ref = np.zeros(2)
-        self.mpc.reset(self.c_ref)
-        self.q_des = np.asarray(q_act, dtype=float).copy()
-        self.mode = "stand"
-        self._mpc_failures = 0
+        self._calib: list[np.ndarray] = []
+        self._bias: np.ndarray | None = None
+        self._cfg = contact_config("flat", "flat")
+        self._cref: np.ndarray | None = None
+        self._c_start = self._c_goal = None
+        self._holding = False
+        self.status = ControllerStatus(["flat", "flat"], None, None, False, None, None)
 
-    def lipm_step(self, p0: np.ndarray):
-        """Advance the CoM reference one tick under the ZMP p0 (exact LIPM solution)."""
-        ch, sh = math.cosh(self.omega * self.dt), math.sinh(self.omega * self.dt)
-        dc = self.c_ref - p0
-        self.c_ref, self.cdot_ref = p0 + dc * ch + self.cdot_ref / self.omega * sh, dc * self.omega * sh + self.cdot_ref * ch
+    def step(self, q_act: np.ndarray, qd_act: np.ndarray, imu_quat_xyzw: np.ndarray, gyro: np.ndarray) -> np.ndarray:
+        """One control tick. Returns joint position targets for the actuated joints."""
+        roll, pitch, roll_d, pitch_d = self.ahrs(q_act, qd_act, imu_quat_xyzw, gyro)
+        joints, joints_d = q_act[self.ind], qd_act[self.ind]
+        self.t += self.dt
+        if self.t <= CALIBRATION_TIME:
+            self._calib.append(np.r_[roll, pitch, joints])
+            return self.q_des
+        if self._bias is None:
+            self._start()
 
-    def step(
-        self, q_act: np.ndarray, qd_act: np.ndarray, imu_quat_xyzw: np.ndarray, gyro: np.ndarray
-    ) -> StabilizerOutput:
-        est = self.estimator.update(q_act, qd_act, imu_quat_xyzw, gyro)
-        recoverable = bool(np.all(est.xi >= ZMP_MIN) and np.all(est.xi <= ZMP_MAX))
-        R = self.estimator.base_rotation(q_act, imu_quat_xyzw)
-        tilted = math.acos(np.clip(R[2, 2], -1.0, 1.0)) > self.tilt_limit
+        r, p = roll - self._bias[0], pitch - self._bias[1]
+        q_meas = np.r_[0.0, 0.0, 0.0, r, p, joints]
+        modes, changed = self.monitor.update(q_meas, np.r_[0.0, 0.0, 0.0, roll_d, pitch_d, joints_d])
+        if any(changed):
+            self._cfg = contact_config(*modes)
+            self._cref = self.model.update_refs(self._cref, self.estimator.q, self._cfg[1], changed)
+        q, qd = self.estimator.update(joints, r, p, joints_d, roll_d, pitch_d, self._cfg[0], self._cref, self._cfg[1])
+        wrench = np.array(self.model.f_wrench(q, qd, self.u, self._cfg[0], self._cref, self._cfg[1], np.zeros(3)))
+        modes, changed = self.monitor.release(wrench[2], q_meas, self._cref, self._cfg[1])
+        if any(changed):
+            self._cfg = contact_config(*modes)
+            q, qd = self.estimator.update(
+                joints, r, p, joints_d, roll_d, pitch_d, self._cfg[0], self._cref, self._cfg[1]
+            )
 
-        sol = None
-        if self.mode == "stand":
-            sol = self.mpc.solve(est.xi, ZMP_MIN, ZMP_MAX)
-            self._mpc_failures = 0 if sol.ok else self._mpc_failures + 1
-            if tilted or est.fallen or self._mpc_failures > self.max_mpc_failures:
-                self.mode = "safe_stop"
-        if self.mode == "stand":
-            self.lipm_step(sol.p0)
-            q_des = self.ik.step(self.c_ref, self.cdot_ref)
-            step_max = self._qd_max * self.dt
-            q_des = np.clip(q_des, self.q_des - step_max, self.q_des + step_max)
-            self.q_des = np.clip(q_des, self._q_min, self._q_max)
+        solve_time = qp_status = None
+        if modes == ["flat", "flat"]:
+            if self._holding:
+                self.nmpc.reset(np.r_[q, qd, self.u])
+                self._holding = False
+            s = min((self.t - CALIBRATION_TIME) / RAMP_TIME, 1.0)
+            c_ref = self._c_start + s * (self._c_goal - self._c_start)
+            plan = [(modes, self._cref)] * (N_NODES + 1)
+            self.u, qp_status, solve_time = self.nmpc.solve(q, qd, self.u, plan, c_ref, self.dt)
+            self.q_des[self.ind] = self.u
+        else:
+            self._holding = True
+        self.status = ControllerStatus(modes, q, qd, self._holding, solve_time, qp_status)
+        return self.q_des
 
-        return StabilizerOutput(
-            q_des=self.q_des.copy(),
-            est=est,
-            mpc=sol,
-            c_ref=self.c_ref.copy(),
-            cdot_ref=self.cdot_ref.copy(),
-            mode=self.mode,
-            recoverable=recoverable,
-        )
+    def _start(self):
+        """End of calibration: AHRS bias (the soles are flat, so the joints fix the true pelvis tilt),
+        contact references, CoM target and NMPC initial guess."""
+        mean = np.mean(self._calib, axis=0)
+        q_stand, self._cref = self.model.initial_state(mean[2:])
+        self._bias = mean[:2] - q_stand[3:5]
+        self.monitor.calibrate(np.r_[0.0, 0.0, 0.0, mean[:2] - self._bias, mean[2:]])
+        self._c_start = np.array(self.model.f_com(q_stand)).ravel()[:2]
+        self._c_goal = 0.5 * (self._cref[0:2] + self._cref[5:7])
+        self.nmpc.reset(np.r_[q_stand, np.zeros(self.model.nq), self.u])

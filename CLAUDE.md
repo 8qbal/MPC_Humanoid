@@ -54,6 +54,10 @@ uv run isaaclab benchmark runtime --task <TASK_NAME> --num_envs 16 --num_steps 1
 uv run isaaclab benchmark training --rl_library <RL_LIBRARY> --task <TASK_NAME> --max_iterations 10
 uv run pre-commit run --all-files                              # lint/format (ruff, codespell, etc.)
 uv run python scripts/run_env.py --viz kit                    # load the Robinion MPC env and play it (headless without --viz)
+uv run python scripts/run_stabilizer.py --push x+2.5           # stage-1 standing controller, one push (axis, N*s) at t = 2 s
+uv run python scripts/run_stabilizer.py --push x+2.5 --passive # same push, servos only hold the default pose
+uv run python scripts/run_stepping.py --steps 20                # stage-2 stepping in place (crouch, calibrate, step)
+uv run python scripts/run_stepping.py --push x+1.75            # one push mid single support while stepping
 ```
 
 `physics=<PRESET>` selects one of the physics presets defined per task (e.g. the
@@ -84,12 +88,15 @@ indexing uses too much memory, remove unused simulator extension paths from
 
 ```
 source/MPC_Humanoid/MPC_Humanoid/   installable package: robot config, env, mpc, RL tasks
-assets/                             USD assets actually loaded by ArticulationCfg
+assets/                             USD assets (robonionv2.usd) + controller URDF (robonionv2_controller.urdf)
 references/                         URDF, CAD-derived docs, git submodules (IK, RL refs)
-scripts/                            run_env.py: load + play the env (not part of the package)
-tools/asset/                        URDF -> USD pipeline scripts (fix, flatten, check)
-outputs/                            scratch / generated output, not source of truth
+scripts/                            run_env.py (load + play the env), run_stabilizer.py (stage-1 controller + push),
+                                    run_stepping.py (stage-2 stepping in place + push)
+tools/asset/                        URDF -> USD pipeline scripts (fix, flatten, check), controller URDF export
+outputs/                            scratch (git-ignored): acados build, stage-1/2 prototypes, validation scripts/data
 docs/PLAN.md                        human-facing roadmap for the MPC controller (not a task list)
+docs/stage1.md                      stage-1 record: designs A-D, equations, validation, push tables
+docs/stage2.md                      stage-2 record: gait design, gait rules, tick time, push tables
 ```
 
 `references/robinion_description` and the other `references/*` folders are **git
@@ -102,16 +109,19 @@ project source to hand-edit, except where noted below.
   path, initial pose, and per-actuator-group `DCMotorCfg`/`ImplicitActuatorCfg`
   (legs, torso/arms, head, and the passive parallelogram joints). This is the one
   source of truth every env/task imports the robot from.
-- `env/` — the plain (non-RL) `ManagerBasedEnvCfg` that the MPC controller will
-  drive directly (`MpcHumanoidRobinionEnvCfg` in `robinion_env_cfg.py`): scene
-  (ground + `ROBINION_CFG` + light), an `ActionsCfg` (joint-effort passthrough over
-  the actuated joints only), and an `ObservationsCfg` with a single `state` group
-  (base lin/ang vel, projected gravity, relative joint pos/vel). Not gym-registered
+- `env/` — the plain (non-RL) `ManagerBasedEnvCfg` that the MPC controller drives
+  directly (`MpcHumanoidRobonionEnvCfg` in `robonion_env_cfg.py`, sim dt 1 ms,
+  decimation 5 = 200 Hz): scene (ground + robot + IMU/AHRS sensors + light), an
+  `ActionsCfg` with `joint_pos` (`JointPositionActionCfg` over the actuated joints, targets
+  relative to the default pose), and an `ObservationsCfg` with a single `state` group:
+  gyro, accelerometer and AHRS orientation (with the MTi-630 noise model), relative joint
+  pos/vel, and simulator-only base lin/ang vel and projected gravity, which the controller
+  must not use (the real robot has no such measurement). Not gym-registered
   — there is no training loop here, so it stays a `ManagerBasedEnvCfg`, not
   `ManagerBasedRLEnvCfg`. `observations` and `actions` are required (`MISSING`) on
   the base class, so any env cfg here must define both.
-- `mpc/` — the controller stack (currently only a placeholder `controller.py`).
-  Kept independent of `tasks/` — it's a plain module, not an RL task.
+- `mpc/` — the controller stack (model, estimator, NMPC, standing and stepping controllers; see
+  *Controller* below). Kept independent of `tasks/` — it's a plain module, not an RL task.
 - `tasks/mpc_humanoid/` — Isaac Lab's generated RL-task tree (gym-registered,
   manager-based, `config/<variant>/` + shared `mdp/`). Currently only holds the
   generated cart-pole placeholder task (`config/cartpole/`); keep it isolated until a real Robinion RL/benchmark task is registered here, then
@@ -121,6 +131,90 @@ project source to hand-edit, except where noted below.
 
 Never conflate `robots/` (asset + actuator config) with the USD asset's raw
 inertial/collision data — `robonionv2.py` deliberately keeps them separate.
+
+## Controller (`mpc/`)
+
+Stage 1 (standing) is done with design D; `docs/stage1.md` records every design tried
+(A-D) with numbers. Stage 2 (stepping in place) is done on the same NMPC; `docs/stage2.md`
+records the gait design, the gait rules and why, and every result. Read both before changing
+the controller.
+
+**Project state (stage 2 closed by the user on 2026-09-26).** Next, in this order: (1) the
+Jetson AGX Orin tick benchmark, run by the user (`docs/stage2.md`, *Benchmark on the Jetson
+AGX Orin*); its result decides whether the tick architecture must change (node count, horizon,
+NMPC in its own thread); (2) a hardware check of the contact-mode monitor and the estimator
+(standing, slow stepping), whose thresholds (0.2 deg, 15 ms lead, 2 ticks) were tuned in
+Isaac only; (3) stage 3, footstep adaptation. Known issues, all listed under *Open* in
+`docs/stage2.md`:
+- Tick 4.2-4.3 ms mean / 4.6-4.8 ms p95 on the desktop, 2 % of ticks over 5 ms; Jetson unknown.
+- Backward pushes while stepping: −x 1.75 N·s survived in 2 of 3 seeds, −x 2.0 falls. Both
+  passed with 4 PhysX velocity iterations; the drop comes from the simulator fix (0
+  iterations), not the controller, and was accepted by the user.
+- After a push the gait holds the targets and waits (up to 3.6 s), no active recovery;
+  lateral pushes beyond ±0.5 / +1.0 N·s need step placement (stage 3).
+- Landing drift ~0.3 mm per step (needs pelvis yaw in the model); ground-height error
+  beyond ±5 mm falls.
+- All results come from Isaac only; limits within one push step are not precise.
+
+- `model.py`: floating base (x, y, z, roll, pitch) + 9 independent joints
+  (`MODEL_JOINTS`: hip roll, front thigh, ankle pitch, ankle roll per leg, torso pitch);
+  passive joints from `PASSIVE_COUPLING`, yaw/arms/head fixed, mass matrix frozen at the
+  standing pose. Contacts are rigid rows with a contact mode per foot (`flat`, `toe`,
+  `heel`, `left_edge`, `right_edge`, `air`); the contact wrench is eliminated in closed
+  form (position-mode servos leave it no freedom). In double support the two sole-pitch
+  rows are identical (parallelograms), so the right one is switched off. Servo K/D/armature
+  and effort limits come from `robots/servo_params.py` (also used by `robonionv2.py`; no Isaac
+  imports, so `mpc/` runs on the Jetson) — never duplicate them.
+- `estimator.py`: `AhrsGyro`, `ContactModeMonitor` (contact mode per foot from sole tilt,
+  tilt rate, sole height and the model-predicted normal force; there is no contact
+  sensing), `ContactProjectionEstimator` (state on the contact manifold). `compiled=True`
+  (used by `stepping.py`) runs `RigidContactModel`, `AhrsGyro` and the estimator as generated C;
+  the `.so` files in `outputs/acados/` are named by a hash of the functions, so a changed model
+  never loads a stale build.
+- `nmpc.py`: acados SQP-RTI NMPC, outputs servo targets. The contact plan (modes per node)
+  is passed by the caller; edge modes are never planned. Cost weights are hardcoded
+  constants by user decision (no config); `W_U = 0.1` was chosen over 10.
+- `controller.py`: `StandingController` — AHRS bias calibration (0.5 s), CoM ramp to the
+  sole centre, NMPC **only while both soles are flat**; in any other mode the servo
+  targets are held (the NMPC acting on edge/air phases made pushes worse than passive).
+- `gait.py`: `GaitPlan` — contact schedule (T_ss 0.3 s, T_ds 0.1 s, clearance 2 cm; user
+  decision, chosen against the 1.1 and 1.5-1.7 Hz modes and the servo rate limit), closed-form
+  DCM/CoM reference, swing-sole spline, `stretch()` for retiming.
+- `gait_nmpc.py`: `GaitNMPC` — `nmpc.py` with per-node references and gates as parameters,
+  compiled contact algebra, RTI split (`prepare` / `feedback`), 16 nodes over the same 0.5 s.
+  Swing weight 1e6 (1e4 barely lifted the foot); non-uniform node grids broke the tuning.
+- `stepping.py`: `SteppingController` — crouch ramp (0.2 rad; straight legs are singular and
+  too slow for the swing; `_LEG_CROUCH` stays 0), AHRS calibration, then the gait. Gait rules
+  (peel-off, retiming on early/late touchdown, "catch" when the stance sole rolls in single
+  support, hold + plan pause + posture reset + standing recovery in double support) are each
+  justified by an Isaac failure in `docs/stage2.md`, and run as a state machine (`State`: STEP,
+  HOLD, RESET, CATCH, RECOVER). Edge detection while stepping uses the predicted tilt
+  (`MONITOR_LEAD` 15 ms: tilt + lead · rate beyond 0.2°) on 2 consecutive ticks
+  (`MONITOR_TICKS`; a touchdown impact reads 12-19 deg/s for one tick); stage 1 keeps the 3 deg/s
+  rate trigger (`lead=None`). The asset runs with 0 PhysX TGS velocity iterations
+  (`robonionv2.py`): with 4, a flat sole read up to 3.6 deg/s of false tilt rate.
+- acados: needs `ACADOS_SOURCE_DIR=$HOME/acados` and `LD_LIBRARY_PATH=$HOME/acados/lib`;
+  the solver is generated into `outputs/acados/` on first use. Delete that folder after
+  changing the NMPC formulation (a solver loaded without rebuilding keeps its old build).
+- Test in Isaac with **one env per process, runs in sequence**: multi-env runs of this
+  asset give different outcomes, and parallel Isaac processes can crash on `sim.reset()`.
+  Compare every push against the passive baseline (`--passive`), one push per run, and run
+  each case with seeds 0, 1, 2 (`--seed`, the sensor-noise realization): results near a limit
+  flip between seeds.
+- Validation tools and data stay in `outputs/stage1_prototypes/` (git-ignored, user
+  decision): `validate3.py` (model + estimator vs `ident.npz` / `truth_*.npz`),
+  `nmpc3_offline.py` (closed loop on the hybrid rigid-contact plant), `isaac_nmpc3.py
+  --truth_state` (NMPC fed with simulator truth). They run from that folder with
+  `uv run --project ../.. python <script>`. `model3.py` there is the validated prototype of
+  `mpc/model.py`; re-check the package model against it after model changes. Stage-2
+  prototypes and test inputs (ground-height error, edge policies, `--truth_state`, traces) are
+  in `outputs/stage2_prototypes/` (`gait_offline.py`, `isaac_gait.py`), run the same way.
+- Open: a stepping tick costs 4.2-4.3 ms mean / 4.6-4.8 ms p95 in Isaac on the desktop (compiled
+  estimation + NMPC), near the 5 ms budget; the real robot runs on a Jetson AGX Orin (not
+  measured: `scripts/run_stepping.py --record run.npz` on the desktop, then
+  `scripts/benchmark_stepping.py run.npz` on the Jetson, no Isaac needed). Lateral push
+  recovery while stepping needs footstep adaptation (stage 3). Landing drift ~0.3 mm per step
+  needs pelvis yaw in the model (walking / turning stage).
 
 ## The URDF → USD pipeline (assets/robonionv2.usd)
 

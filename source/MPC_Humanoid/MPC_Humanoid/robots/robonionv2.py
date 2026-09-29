@@ -1,4 +1,4 @@
-# Robonion TKU humanoid
+# Robonion TKU humanoid config for isaaclab use
 
 from __future__ import annotations
 

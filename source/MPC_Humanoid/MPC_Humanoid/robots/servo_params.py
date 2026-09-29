@@ -1,16 +1,15 @@
-"""Robonion servo parameters, without Isaac imports: robonionv2.py builds the actuator models from them, and the
-controller (mpc/) uses them on machines without Isaac Sim (e.g. the Jetson)."""
+# Ref for mpc model builder and the isaac sim
 
-# Motor parameters follow references/robonion_description/robonion2.urdf, which is authoritative for
-URDF_LIMITS = {  # group: (effort [N·m], velocity [rad/s])
-    "yaw": (4.1, 4.82),  # hip yaw, elbow yaw, head
+# Motor parameters follow references/robonion_description/robonion2.urdf, which is a dict of 
+URDF_LIMITS = {  # key <-> value: (effort [N·m], velocity [rad/s])
+    "yaw": (4.1, 4.82),  # hip yaw, elbow yaw, head yaw
     "torso_arms": (10.6, 3.14),  # torso pitch, shoulder pitch/roll, elbow pitch
     "legs": (9.9, 4.08),  # hip roll, ankle pitch/roll, left front thigh
     "right_thigh": (19.8, 4.08),
 }
-URDF_FRICTION = 0.0  # N·m, <dynamics friction> on every joint
+URDF_FRICTION = 0.0  # N·m
 
-# Values not defined in the URDF come from the servo datasheets (use 11.1 V bus til i check with jaesik)
+# Values not defined in the URDF come from the servo datasheets (use 11.1 V for the meantime)
 XH540_STIFFNESS = 42.0  # N·m/rad
 XH430_STIFFNESS = 16.6  # N·m/rad
 XH540_DAMPING = 2.4  # N·m·s/rad, 9.2 N·m / 3.77 rad/s

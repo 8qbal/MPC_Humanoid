@@ -4,56 +4,68 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """
-NMPC on the rigid-contact model (design D in docs/stage1.md), acados SQP-RTI.
+NMPC for stepping in place (stage 2 in docs/stage2.md): the design-D NMPC of nmpc.py with a gait plan.
 
-x = [q (14), qd (14), u (9)], control v = du/dt; the output is u, the servo targets of the model joints.
-The contact mode of each foot is a per-node parameter, so the caller passes a contact plan over the
-horizon (flat and air; edge modes are not planned, the robot recovers from them passively).
-
-The contact algebra (Jc, (Jc M^-1 Jc^T)^-1, Jdot qd, contact rows) is evaluated numerically at each node
-of the previous plan and passed as parameters, so inside a node interval the contact dynamics are
-linear in the state while servo torques and gravity stay exact. Eliminating the contact wrench
-symbolically instead took ~245 ms per solve (integrator sensitivities); this takes a few ms.
+Same model, dynamics, constraints and cost weights as nmpc.py, plus:
+- per-node references as parameters: DCM, CoM velocity and the sole-centre position of a swinging foot; the
+  cost residuals subtract them, so yref is constant;
+- per-node gates: the leg-length cost only for feet in contact, the swing-position cost only for feet in the
+  air, the minimum normal force only for feet in contact; all constraint bounds are then constant (a foot in
+  the air has zero wrench, so its CoP and friction rows read 0 >= 0);
+- all node parameters are written with one set_flat call; the contact algebra along the previous plan is a
+  compiled CasADi function and the (Jc M^-1 Jc^T)^-1 blocks are inverted as one batch;
+- the RTI iteration can be split: prepare() linearises for the next tick after this tick's targets are out,
+  feedback() then only solves the QP with the new state.
 """
 
 from __future__ import annotations
 
-import math
 import os
+import subprocess
 
 import casadi as ca
 import numpy as np
 from acados_template import AcadosModel, AcadosOcp, AcadosOcpSolver
 
-from MPC_Humanoid.robots.servo_params import URDF_LIMITS, XH540_DAMPING, XH540_STIFFNESS
+from MPC_Humanoid.robots.servo_params import XH540_DAMPING, XH540_STIFFNESS
 
 from .model import SOLE_HALF_LENGTH, SOLE_HALF_WIDTH, RigidContactModel, contact_config, rot_axis
+from .nmpc import (
+    BUILD_DIR,
+    COP_MARGIN,
+    EFFORT_FRACTION,
+    F_MIN,
+    HORIZON,
+    MU,
+    OMEGA,
+    U_RANGE_DEG,
+    U_RATE_MAX,
+    W_COMD,
+    W_DCM,
+    W_LEG,
+    W_PELVIS,
+    W_RATE,
+    W_SQUEEZE,
+    W_TERM,
+    W_TILT,
+    W_TORSO,
+    W_U,
+)
 
-BUILD_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../outputs/acados"))
-
-N_NODES = 25
-HORIZON = 0.5  # s
-OMEGA = math.sqrt(9.81 / 0.48)  # LIPM natural frequency at the standing CoM height
-F_MIN = 5.0  # N, minimum normal force of a sole in contact
-MU = 0.5  # friction coefficient for the controller; the env gives ~0.75 (ground 1.0, feet PhysX default 0.5)
-COP_MARGIN = 0.01  # m inside the sole edges
-EFFORT_FRACTION = 0.8
-# Servo-target excursion from the standing pose [deg]: hip roll, front thigh, ankle pitch, ankle roll
-# (left, right), torso pitch. Without bounds the NMPC swung the torso by over 100 deg after pushes.
-U_RANGE_DEG = np.array([15, 20, 20, 15, 15, 20, 20, 15, 15], dtype=float)
-U_RATE_MAX = URDF_LIMITS["legs"][1]
-
-# Cost weights. W_U = 0.1 lets the CoM move to the sole centre: better against backward pushes
-# (the weakest direction) than W_U = 10, which holds the pose and is better against forward pushes.
-W_DCM, W_COMD, W_TORSO, W_U, W_RATE = 100.0, 5.0, 10.0, 0.1, 0.5
-W_SQUEEZE, W_TILT, W_SOLE_Z, W_TERM = 1e-4, 1e3, 1e3, 1e3
-# The leg-length and pelvis terms keep the NMPC from folding a knee or rolling the pelvis: at the
-# straight-leg pose a knee bend is nearly invisible to the linearised contact model.
-W_LEG, W_PELVIS = 1e4, 100.0
+# 16 nodes of 31.25 ms over the same 0.5 s horizon behave like nmpc.py's 25 nodes of 20 ms while stepping and
+# cost ~40 % less per tick; non-uniform grids (20 ms nodes first, longer ones after) raised the torso torque
+# above the servo limit.
+GAIT_N_NODES = 16
+# At 1e4 the swing foot reached 30 % of its planned height (the servo-rate cost dominated), at 1e6 94 %.
+W_SWING = 1e6
 
 
-class ContactNMPC:
-    def __init__(self, model: RigidContactModel, build: bool | None = None, name: str = "robinion_nmpc"):
+class GaitNMPC:
+    def __init__(self, model: RigidContactModel, build: bool | None = None):
+        N = self.N = GAIT_N_NODES
+        # a solver found in the build folder is loaded without rebuilding, so the name carries what changes it
+        name = f"robinion_stepping_n{N}"
+        self.t_nodes = np.linspace(0.0, HORIZON, N + 1)  # node times from the current tick
         M = self.m = model
         nq = self.nq = M.nq
         q, qd, u = M.q_sym, M.qd_sym, M.u_sym
@@ -65,7 +77,13 @@ class ContactNMPC:
         gk = ca.SX.sym("gk", 10)
         ck = ca.SX.sym("ck", 10)
         qk = ca.SX.sym("qk", nq)
-        p = ca.vertcat(flags, cref, pc, isflat, ca.vec(Jk), ca.vec(Aik), gk, ck, qk)
+        contact = ca.SX.sym("contact", 2)
+        dcm_ref = ca.SX.sym("dcm_ref", 2)
+        comd_ref = ca.SX.sym("comd_ref", 2)
+        sole_ref = ca.SX.sym("sole_ref", 6)
+        p = ca.vertcat(
+            flags, cref, pc, isflat, ca.vec(Jk), ca.vec(Aik), gk, ck, qk, contact, dcm_ref, comd_ref, sole_ref
+        )
 
         tau = XH540_STIFFNESS * (u - q[5:]) - XH540_DAMPING * qd[5:]
         b = M.Gj.T @ tau - M.gravity_expr
@@ -92,7 +110,7 @@ class ContactNMPC:
         m_flat = sum(isflat[i] * ((C[0, i] - x_bar) * fz[i] - my[i]) for i in (0, 1))
         fric = [MU * fz[i] + s * W[j, i] for i in (0, 1) for j in (0, 1) for s in (-1, 1)]
         am.con_h_expr = ca.vertcat(
-            fz,  # 0-1
+            fz - F_MIN * contact,  # 0-1
             hw * fz[0] - mx[0],
             hw * fz[0] + mx[0],
             hw * fz[1] - mx[1],
@@ -108,28 +126,35 @@ class ContactNMPC:
         com, comd = M.com_expr, M.comd_expr
         dcm = com[:2] + comd[:2] / OMEGA
         squeeze = W[:2, 0] - W[:2, 1]
-        sole_z = ca.vertcat(ca.sum2(corners[2, :4]), ca.sum2(corners[2, 4:])) / 4
-        # sole centre height below the pelvis, in the pelvis frame
+        soles = [ca.sum2(corners[:, 4 * i : 4 * i + 4]) / 4 for i in (0, 1)]
         Rb = rot_axis((0, 1, 0), q[4]) @ rot_axis((1, 0, 0), q[3])
-        leg = ca.vertcat(*[(Rb.T @ (ca.sum2(corners[:, 4 * i : 4 * i + 4]) / 4 - q[:3]))[2] for i in (0, 1)])
-        am.cost_y_expr = ca.vertcat(dcm, comd[:2], q[13], u, v, squeeze, ca.vec(tilt), sole_z, leg, q[3:5])
-        am.cost_y_expr_e = ca.vertcat(dcm, comd[:2], ca.vec(tilt), sole_z, leg, q[3:5])
+        leg = ca.vertcat(*[(Rb.T @ (soles[i] - q[:3]))[2] for i in (0, 1)])
+        self.u_nom = M.q0_joints.copy()
+        q_init, _ = M.initial_state(self.u_nom)
+        leg0 = np.array(ca.Function("leg", [q], [leg])(q_init)).ravel()
+        swing = ca.vertcat(*[(1 - contact[i]) * (soles[i] - sole_ref[3 * i : 3 * i + 3]) for i in (0, 1)])
+        leg_err = ca.vertcat(*[contact[i] * (leg[i] - leg0[i]) for i in (0, 1)])
+        track = ca.vertcat(dcm - dcm_ref, comd[:2] - comd_ref)
+        am.cost_y_expr = ca.vertcat(track, q[13], u, v, squeeze, ca.vec(tilt), swing, leg_err, q[3:5])
+        am.cost_y_expr_e = ca.vertcat(track, ca.vec(tilt), swing, leg_err, q[3:5])
+        self.f_sole = ca.Function("soles", [q], [ca.horzcat(*soles)])
 
         qs, qds, pcs = ca.SX.sym("qs", nq), ca.SX.sym("qds", nq), ca.SX.sym("pcs", 6)
-        self.f_alg = ca.Function(
-            "alg", [qs, qds, pcs], [M.f_Jc(qs, pcs), M.f_crow(qs, pcs), M.f_Jdqd(qs, qds, pcs)]
-        ).map(N_NODES + 1)
+        raw = M.raw_sx
+        f_map = ca.Function(
+            "alg", [qs, qds, pcs], [raw["Jc"](qs, pcs), raw["crow"](qs, pcs), raw["Jdqd"](qs, qds, pcs)]
+        )
+        f_map = f_map.map(N + 1)
+        Qs, QDs, PCs = ca.SX.sym("Q", nq, N + 1), ca.SX.sym("QD", nq, N + 1), ca.SX.sym("PC", 6, N + 1)
+        f_alg = ca.Function("alg_all", [Qs, QDs, PCs], f_map(Qs, QDs, PCs))
 
-        self.u_nom = M.q0_joints.copy()
-        q_init, cref0 = M.initial_state(self.u_nom)
-        self.q_init = q_init
-        leg0 = np.array(ca.Function("leg", [q], [leg])(q_init)).ravel()
-        self.yref = np.r_[np.zeros(4), self.u_nom[8], self.u_nom, np.zeros(9 + 2 + 4 + 2), leg0, 0.0, 0.0]
-        self.yref_e = np.r_[np.zeros(2 + 2 + 4 + 2), leg0, 0.0, 0.0]
+        yref = np.zeros(4 + 1 + 9 + 9 + 2 + 4 + 6 + 2 + 2)
+        yref[4] = self.u_nom[8]
+        yref[5:14] = self.u_nom
 
         ocp = AcadosOcp()
         ocp.model = am
-        ocp.solver_options.N_horizon = N_NODES
+        ocp.solver_options.N_horizon = N
         ocp.solver_options.tf = HORIZON
         ocp.cost.cost_type = ocp.cost.cost_type_e = "NONLINEAR_LS"
         ocp.cost.W = np.diag(
@@ -140,18 +165,18 @@ class ContactNMPC:
             + [W_RATE] * 9
             + [W_SQUEEZE] * 2
             + [W_TILT] * 4
-            + [W_SOLE_Z] * 2
+            + [W_SWING] * 6
             + [W_LEG] * 2
             + [W_PELVIS] * 2
         )
         ocp.cost.W_e = np.diag(
-            [W_TERM] * 2 + [W_COMD] * 2 + [W_TILT] * 4 + [W_SOLE_Z] * 2 + [W_LEG] * 2 + [W_PELVIS] * 2
+            [W_TERM] * 2 + [W_COMD] * 2 + [W_TILT] * 4 + [W_SWING] * 6 + [W_LEG] * 2 + [W_PELVIS] * 2
         )
-        ocp.cost.yref, ocp.cost.yref_e = self.yref.copy(), self.yref_e.copy()
-        flat_plan = [(["flat", "flat"], cref0)] * (N_NODES + 1)
-        Q0, QD0 = np.tile(q_init, (N_NODES + 1, 1)), np.zeros((N_NODES + 1, nq))
-        ocp.parameter_values = self._params(flat_plan, Q0, QD0)[0]
-        ocp.constraints.lh, ocp.constraints.uh = self._bounds(("flat", "flat"))
+        ocp.cost.yref, ocp.cost.yref_e = yref, np.zeros(18)
+        ocp.parameter_values = np.zeros(p.shape[0])
+        lh, uh = np.zeros(self.nh), np.full(self.nh, 1e4)
+        lh[16:], uh[16:] = -self.effort, self.effort
+        ocp.constraints.lh, ocp.constraints.uh = lh, uh
         ocp.constraints.idxsh = np.arange(self.nh)
         # slack penalties (L1, L2) per row group: forces [N], moments [N m], servo torque [N m]
         z1 = np.r_[[10.0] * 2, [1e3] * 6, [10.0] * 8, [1e3] * 9]
@@ -166,94 +191,120 @@ class ContactNMPC:
         ocp.constraints.lbu, ocp.constraints.ubu = np.full(9, -U_RATE_MAX), np.full(9, U_RATE_MAX)
         so = ocp.solver_options
         so.qp_solver = "PARTIAL_CONDENSING_HPIPM"
+        # partial condensing to 5 stages, HPIPM speed mode and a warm start: QP 2.9 -> 2.1 ms per tick
+        so.qp_solver_cond_N = 5
+        so.hpipm_mode = "SPEED"
+        so.qp_solver_warm_start = 1
+        so.qp_solver_iter_max = 100
         so.hessian_approx = "GAUSS_NEWTON"
-        # Radau IIA, 2 stages, one step per node: matches RK4 at 1 ms within 0.005 mm of CoM over the
-        # horizon and stays stable for the -600 1/s mode of a foot in the air
         so.integrator_type = "IRK"
         so.collocation_type = "GAUSS_RADAU_IIA"
         so.sim_method_num_stages = 2
         so.sim_method_num_steps = 1
         so.sim_method_newton_iter = 1
+        so.sim_method_jac_reuse = 1
         so.nlp_solver_type = "SQP_RTI"
-        so.qp_solver_iter_max = 100
         ocp.code_export_directory = os.path.join(BUILD_DIR, name)
         json_file = os.path.join(ocp.code_export_directory, f"{name}.json")
         if build is None:
             build = not os.path.isfile(json_file)
         self.solver = AcadosOcpSolver(ocp, json_file=json_file, build=build, generate=build, verbose=False)
+        # the contact algebra in the CasADi VM took ~2 ms per tick; compiled it is a small fraction of that
+        so_file = os.path.join(ocp.code_export_directory, "alg.so")
+        if build or not os.path.isfile(so_file):
+            cg = ca.CodeGenerator("alg.c")
+            cg.add(f_alg)
+            cg.generate(ocp.code_export_directory + os.sep)
+            c_file = os.path.join(ocp.code_export_directory, "alg.c")
+            subprocess.run(["gcc", "-O3", "-march=native", "-shared", "-fPIC", c_file, "-o", so_file], check=True)
+        self.f_alg = ca.external("alg_all", so_file)
+        self.nx = 2 * nq + 9
+        self._diag = np.arange(10)
+        self._cfg_cache = {}
+        self.nan_resets = 0
         self.X: np.ndarray | None = None
         self.reset(np.r_[q_init, np.zeros(nq), self.u_nom])
 
     def reset(self, x0: np.ndarray):
         """Initial guess x0 at every node; forget the previous plan."""
-        for k in range(N_NODES + 1):
+        for k in range(self.N + 1):
             self.solver.set(k, "x", x0)
         self.X = None
 
-    def _params(self, plan, Q: np.ndarray, QD: np.ndarray) -> list[np.ndarray]:
-        cfgs = [contact_config(*modes) for modes, _ in plan]
-        J, c, g = (np.array(a) for a in self.f_alg(Q.T, QD.T, np.array([cf[1] for cf in cfgs]).T))
-        params = []
-        for k, (modes, cref) in enumerate(plan):
-            flags, pc = cfgs[k]
-            Jk = J[:, self.nq * k : self.nq * (k + 1)]
-            A = flags[:, None] * (Jk @ self.m.Minv @ Jk.T) + np.diag(1.0 - flags)
-            params.append(
-                np.r_[
-                    flags,
-                    cref,
-                    pc,
-                    [float(m == "flat") for m in modes],
-                    Jk.ravel(order="F"),
-                    np.linalg.inv(A).ravel(order="F"),
-                    g[:, k],
-                    c[:, k],
-                    Q[k],
-                ]
+    def _config(self, modes):
+        if modes not in self._cfg_cache:
+            flags, pc = contact_config(*modes)
+            self._cfg_cache[modes] = (
+                flags,
+                pc,
+                np.array([float(m == "flat") for m in modes]),
+                np.array([float(m != "air") for m in modes]),
             )
-        return params
+        return self._cfg_cache[modes]
 
-    def _bounds(self, modes) -> tuple[np.ndarray, np.ndarray]:
-        lh, uh = np.full(self.nh, -1e4), np.full(self.nh, 1e4)
-        for i, mode in enumerate(modes):
-            if mode == "air":
-                continue
-            if mode != "flat":
-                raise ValueError(f"edge mode {mode!r} cannot be planned")
-            lh[i] = F_MIN
-            lh[2 + 2 * i : 4 + 2 * i] = 0.0
-            lh[6:8] = 0.0
-            lh[8 + 4 * i : 12 + 4 * i] = 0.0
-        lh[16:], uh[16:] = -self.effort, self.effort
-        return lh, uh
+    def _set_params(self, q, qd, plan):
+        n, nq = self.N + 1, self.nq
+        if self.X is None:
+            Q, QD = np.tile(q, (n, 1)), np.tile(qd, (n, 1))
+        else:
+            Q, QD = self.X[:, :nq].copy(), self.X[:, nq : 2 * nq].copy()
+            Q[0], QD[0] = q, qd
+        cfgs = [self._config(tuple(node["modes"])) for node in plan]
+        flags = np.array([cf[0] for cf in cfgs])
+        pcs = np.array([cf[1] for cf in cfgs])
+        J, c, g = (np.array(a) for a in self.f_alg(Q.T, QD.T, pcs.T))
+        Jb = J.reshape(10, n, nq).transpose(1, 0, 2)
+        A = flags[:, :, None] * (Jb @ self.m.Minv @ Jb.transpose(0, 2, 1))
+        A[:, self._diag, self._diag] += 1.0 - flags
+        P = np.concatenate(
+            [
+                flags,
+                np.array([node["cref"] for node in plan]),
+                pcs,
+                np.array([cf[2] for cf in cfgs]),
+                Jb.transpose(0, 2, 1).reshape(n, -1),
+                np.linalg.inv(A).transpose(0, 2, 1).reshape(n, -1),
+                g.T,
+                c.T,
+                Q,
+                np.array([cf[3] for cf in cfgs]),
+                np.array([node["dcm"] for node in plan]),
+                np.array([node["comd"] for node in plan]),
+                np.array([np.asarray(node["sole"]).T.ravel() for node in plan]),
+            ],
+            axis=1,
+        )
+        self.solver.set_flat("p", P.ravel())
 
-    def solve(
-        self, q: np.ndarray, qd: np.ndarray, u_prev: np.ndarray, plan, c_ref: np.ndarray, dt: float
-    ) -> tuple[np.ndarray, int, float]:
-        """One SQP-RTI iteration from state (q, qd) and the current servo targets u_prev.
-
-        plan: N_NODES + 1 pairs (modes, contact references) per node. Returns the servo targets for the
-        next tick, the QP status and the solver time [s].
-        """
+    def _feedback(self, q, qd, u_prev, dt, phase):
         x0 = np.r_[q, qd, u_prev]
         self.solver.set(0, "lbx", x0)
         self.solver.set(0, "ubx", x0)
-        if self.X is None:
-            Q, QD = np.tile(q, (N_NODES + 1, 1)), np.tile(qd, (N_NODES + 1, 1))
-        else:
-            Q, QD = self.X[:, : self.nq].copy(), self.X[:, self.nq : 2 * self.nq].copy()
-            Q[0], QD[0] = q, qd
-        y, y_e = self.yref.copy(), self.yref_e.copy()
-        y[:2] = y_e[:2] = c_ref
-        for k, (p, (modes, _)) in enumerate(zip(self._params(plan, Q, QD), plan)):
-            self.solver.set(k, "p", p)
-            if k < N_NODES:
-                self.solver.set(k, "yref", y)
-                if k > 0:
-                    lh, uh = self._bounds(modes)
-                    self.solver.constraints_set(k, "lh", lh)
-                    self.solver.constraints_set(k, "uh", uh)
-        self.solver.set(N_NODES, "yref", y_e)
+        self.solver.options_set("rti_phase", phase)
         status = self.solver.solve()
-        self.X = np.array([self.solver.get(k, "x") for k in range(N_NODES + 1)])
-        return u_prev + self.solver.get(0, "u") * dt, status, float(self.solver.get_stats("time_tot"))
+        self.X = self.solver.get_flat("x").reshape(self.N + 1, self.nx)
+        v = self.solver.get(0, "u")
+        time_tot = float(self.solver.get_stats("time_tot"))
+        if not (np.all(np.isfinite(self.X)) and np.all(np.isfinite(v))):
+            # a NaN iterate stays NaN in every later RTI step: restart from the measured state, hold the targets
+            self.nan_resets += 1
+            self.reset(x0)
+            return u_prev, status, time_tot
+        return u_prev + v * dt, status, time_tot
+
+    def solve(self, q, qd, u_prev, plan, dt):
+        """One full SQP-RTI iteration from (q, qd) and the current servo targets u_prev. plan: N + 1 dicts with
+        keys modes, cref, dcm, comd, sole (3 x 2 sole-centre targets, used for feet in the air). Returns the
+        servo targets for the next tick, the QP status and the solver time [s]."""
+        self._set_params(q, qd, plan)
+        return self._feedback(q, qd, u_prev, dt, 0)
+
+    def prepare(self, q, qd, plan):
+        """RTI preparation for the next tick: linearisation with the next tick's plan around the current iterate."""
+        self._set_params(q, qd, plan)
+        self.solver.options_set("rti_phase", 1)
+        self.solver.solve()
+
+    def feedback(self, q, qd, u_prev, dt):
+        """RTI feedback on a prepared linearisation: only the QP with the new initial state."""
+        return self._feedback(q, qd, u_prev, dt, 2)

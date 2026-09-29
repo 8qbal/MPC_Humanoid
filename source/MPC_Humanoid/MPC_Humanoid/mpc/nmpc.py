@@ -4,11 +4,19 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """
-NMPC for stepping in place (stage 2 in docs/stage2.md): the design-D NMPC of nmpc.py with a gait plan.
+NMPC on the rigid-contact model with a gait plan (design D in docs/stage1.md, stepping in docs/stage2.md), acados
+SQP-RTI.
 
-Same model, dynamics, constraints and cost weights as nmpc.py, plus:
-- per-node references as parameters: DCM, CoM velocity and the sole-centre position of a swinging foot; the
-  cost residuals subtract them, so yref is constant;
+x = [q (14), qd (14), u (9)], control v = du/dt; the output is u, the servo targets of the model joints. The caller
+passes a plan over the horizon: per node the contact modes (flat and air; edge modes are never planned), contact
+references, DCM, CoM velocity and the sole-centre position of a swinging foot.
+
+The contact algebra (Jc, (Jc M^-1 Jc^T)^-1, Jdot qd, contact rows) is evaluated numerically at each node of the
+previous plan and passed as parameters, so inside a node interval the contact dynamics are linear in the state while
+servo torques and gravity stay exact. Eliminating the contact wrench symbolically instead took ~245 ms per solve
+(integrator sensitivities); this takes a few ms.
+
+- per-node references as parameters: the cost residuals subtract them, so yref is constant;
 - per-node gates: the leg-length cost only for feet in contact, the swing-position cost only for feet in the
   air, the minimum normal force only for feet in contact; all constraint bounds are then constant (a foot in
   the air has zero wrench, so its CoP and friction rows read 0 >= 0);
@@ -16,10 +24,15 @@ Same model, dynamics, constraints and cost weights as nmpc.py, plus:
   compiled CasADi function and the (Jc M^-1 Jc^T)^-1 blocks are inverted as one batch;
 - the RTI iteration can be split: prepare() linearises for the next tick after this tick's targets are out,
   feedback() then only solves the QP with the new state.
+
+scripts/build_controller.py (no Isaac) builds the solver into outputs/acados/robonion_nmpc_<hash>/, the hash taken
+from the OCP expressions and numbers; at runtime it is only loaded.
 """
 
 from __future__ import annotations
 
+import hashlib
+import math
 import os
 import subprocess
 
@@ -27,44 +40,50 @@ import casadi as ca
 import numpy as np
 from acados_template import AcadosModel, AcadosOcp, AcadosOcpSolver
 
-from MPC_Humanoid.robots.servo_params import XH540_DAMPING, XH540_STIFFNESS
+from MPC_Humanoid.robots.robonion_params import URDF_LIMITS, XH540_DAMPING, XH540_STIFFNESS
 
 from .model import SOLE_HALF_LENGTH, SOLE_HALF_WIDTH, RigidContactModel, contact_config, rot_axis
-from .nmpc import (
-    BUILD_DIR,
-    COP_MARGIN,
-    EFFORT_FRACTION,
-    F_MIN,
-    HORIZON,
-    MU,
-    OMEGA,
-    U_RANGE_DEG,
-    U_RATE_MAX,
-    W_COMD,
-    W_DCM,
-    W_LEG,
-    W_PELVIS,
-    W_RATE,
-    W_SQUEEZE,
-    W_TERM,
-    W_TILT,
-    W_TORSO,
-    W_U,
-)
 
-# 16 nodes of 31.25 ms over the same 0.5 s horizon behave like nmpc.py's 25 nodes of 20 ms while stepping and
-# cost ~40 % less per tick; non-uniform grids (20 ms nodes first, longer ones after) raised the torso torque
-# above the servo limit.
-GAIT_N_NODES = 16
+BUILD_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../outputs/acados"))
+BUILD_HINT = "run `uv run python scripts/build_controller.py` first (no Isaac needed)"
+
+# 16 nodes of 31.25 ms over the 0.5 s horizon behave like 25 nodes of 20 ms while stepping and cost ~40 % less per
+# tick; non-uniform grids (20 ms nodes first, longer ones after) raised the torso torque above the servo limit.
+N_NODES = 16
+HORIZON = 0.5  # s
+OMEGA = math.sqrt(9.81 / 0.48)  # LIPM natural frequency at the standing CoM height
+F_MIN = 5.0  # N, minimum normal force of a sole in contact
+MU = 0.5  # friction coefficient for the controller; the env gives ~0.75 (ground 1.0, feet PhysX default 0.5)
+COP_MARGIN = 0.01  # m inside the sole edges
+EFFORT_FRACTION = 0.8
+# Servo-target excursion from the standing pose [deg]: hip roll, front thigh, ankle pitch, ankle roll
+# (left, right), torso pitch. Without bounds the NMPC swung the torso by over 100 deg after pushes.
+U_RANGE_DEG = np.array([15, 20, 20, 15, 15, 20, 20, 15, 15], dtype=float)
+U_RATE_MAX = URDF_LIMITS["legs"][1]
+
+# Cost weights. W_U = 0.1 lets the CoM move to the sole centre: better against backward pushes
+# (the weakest direction) than W_U = 10, which holds the pose and is better against forward pushes.
+W_DCM, W_COMD, W_TORSO, W_U, W_RATE = 100.0, 5.0, 10.0, 0.1, 0.5
+W_SQUEEZE, W_TILT, W_TERM = 1e-4, 1e3, 1e3
+# The leg-length and pelvis terms keep the NMPC from folding a knee or rolling the pelvis: at the
+# straight-leg pose a knee bend is nearly invisible to the linearised contact model.
+W_LEG, W_PELVIS = 1e4, 100.0
 # At 1e4 the swing foot reached 30 % of its planned height (the servo-rate cost dominated), at 1e6 94 %.
 W_SWING = 1e6
 
 
-class GaitNMPC:
-    def __init__(self, model: RigidContactModel, build: bool | None = None):
-        N = self.N = GAIT_N_NODES
-        # a solver found in the build folder is loaded without rebuilding, so the name carries what changes it
-        name = f"robinion_stepping_n{N}"
+def _ocp_key(functions: list[ca.Function], arrays: list, options: dict) -> str:
+    h = hashlib.sha1("".join(f.serialize() for f in functions).encode())
+    for a in arrays:
+        h.update(np.asarray(a, dtype=float).tobytes())
+    h.update(repr(sorted(options.items())).encode())
+    return h.hexdigest()[:12]
+
+
+class RobonionNMPC:
+    def __init__(self, model: RigidContactModel, build: bool = False):
+        """build: generate and compile the solver (scripts/build_controller.py); otherwise load the existing build."""
+        N = self.N = N_NODES
         self.t_nodes = np.linspace(0.0, HORIZON, N + 1)  # node times from the current tick
         M = self.m = model
         nq = self.nq = M.nq
@@ -94,7 +113,7 @@ class GaitNMPC:
         xdot = ca.SX.sym("xdot", x.shape[0])
         f = ca.vertcat(qd, qdd, v)
         am = AcadosModel()
-        am.name, am.x, am.u, am.xdot, am.p = name, x, v, xdot, p
+        am.x, am.u, am.xdot, am.p = x, v, xdot, p
         am.f_expl_expr, am.f_impl_expr = f, xdot - f
 
         wrench = []
@@ -189,34 +208,52 @@ class GaitNMPC:
         ocp.constraints.ubx = self.u_nom + np.radians(U_RANGE_DEG)
         ocp.constraints.idxbu = np.arange(9)
         ocp.constraints.lbu, ocp.constraints.ubu = np.full(9, -U_RATE_MAX), np.full(9, U_RATE_MAX)
-        so = ocp.solver_options
-        so.qp_solver = "PARTIAL_CONDENSING_HPIPM"
-        # partial condensing to 5 stages, HPIPM speed mode and a warm start: QP 2.9 -> 2.1 ms per tick
-        so.qp_solver_cond_N = 5
-        so.hpipm_mode = "SPEED"
-        so.qp_solver_warm_start = 1
-        so.qp_solver_iter_max = 100
-        so.hessian_approx = "GAUSS_NEWTON"
-        so.integrator_type = "IRK"
-        so.collocation_type = "GAUSS_RADAU_IIA"
-        so.sim_method_num_stages = 2
-        so.sim_method_num_steps = 1
-        so.sim_method_newton_iter = 1
-        so.sim_method_jac_reuse = 1
-        so.nlp_solver_type = "SQP_RTI"
+        options = {
+            "qp_solver": "PARTIAL_CONDENSING_HPIPM",
+            # partial condensing to 5 stages, HPIPM speed mode and a warm start: QP 2.9 -> 2.1 ms per tick
+            "qp_solver_cond_N": 5,
+            "hpipm_mode": "SPEED",
+            "qp_solver_warm_start": 1,
+            "qp_solver_iter_max": 100,
+            "hessian_approx": "GAUSS_NEWTON",
+            # Radau IIA, 2 stages, one step per node: matches RK4 at 1 ms within 0.005 mm of CoM over the
+            # horizon and stays stable for the -600 1/s mode of a foot in the air
+            "integrator_type": "IRK",
+            "collocation_type": "GAUSS_RADAU_IIA",
+            "sim_method_num_stages": 2,
+            "sim_method_num_steps": 1,
+            "sim_method_newton_iter": 1,
+            "sim_method_jac_reuse": 1,
+            "nlp_solver_type": "SQP_RTI",
+        }
+        for key, value in options.items():
+            setattr(ocp.solver_options, key, value)
+
+        f_ocp = ca.Function("ocp", [x, v, xdot, p], [am.f_impl_expr, am.cost_y_expr, am.cost_y_expr_e, am.con_h_expr])
+        numbers = [[N, HORIZON], ocp.cost.W, ocp.cost.W_e, yref, lh, uh, z1, z2, ocp.constraints.x0]
+        numbers += [ocp.constraints.idxbx, ocp.constraints.lbx, ocp.constraints.ubx]
+        numbers += [ocp.constraints.idxbu, ocp.constraints.lbu, ocp.constraints.ubu]
+        name = f"robonion_nmpc_{_ocp_key([f_ocp, f_alg], numbers, options)}"
+        am.name = ocp.name = name
         ocp.code_export_directory = os.path.join(BUILD_DIR, name)
         json_file = os.path.join(ocp.code_export_directory, f"{name}.json")
-        if build is None:
-            build = not os.path.isfile(json_file)
-        self.solver = AcadosOcpSolver(ocp, json_file=json_file, build=build, generate=build, verbose=False)
+        lib_file = os.path.join(ocp.code_export_directory, f"libacados_ocp_solver_{name}.so")
         # the contact algebra in the CasADi VM took ~2 ms per tick; compiled it is a small fraction of that
         so_file = os.path.join(ocp.code_export_directory, "alg.so")
-        if build or not os.path.isfile(so_file):
+        if build:
+            self.solver = AcadosOcpSolver(ocp, json_file=json_file, verbose=False)
             cg = ca.CodeGenerator("alg.c")
             cg.add(f_alg)
             cg.generate(ocp.code_export_directory + os.sep)
             c_file = os.path.join(ocp.code_export_directory, "alg.c")
             subprocess.run(["gcc", "-O3", "-march=native", "-shared", "-fPIC", c_file, "-o", so_file], check=True)
+        else:
+            missing = [f for f in (json_file, lib_file, so_file) if not os.path.isfile(f)]
+            if missing:
+                raise FileNotFoundError(f"NMPC build not found ({', '.join(missing)}): {BUILD_HINT}")
+            self.solver = AcadosOcpSolver(
+                ocp, json_file=json_file, generate=False, build=False, check_reuse_possible=False, verbose=False
+            )
         self.f_alg = ca.external("alg_all", so_file)
         self.nx = 2 * nq + 9
         self._diag = np.arange(10)

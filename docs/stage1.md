@@ -11,9 +11,11 @@ Goal: double-support standing that recovers from pushes without stepping, runnin
 | B. NMPC, flat-foot reduced model | prototype (acados, ≈ 1 ms/solve) | stable, CoM to the sole centre, servo sag compensated automatically | ≈ passive baseline; depends mostly on where the CoM is held |
 | C. NMPC, soft-contact floating-base model | prototype (acados IRK, 5–55 ms/solve) | stable | promising once (+x 2.5 N·s: 2.5° sole tilt vs 15.9° passive, offline) but the QP fails after larger pushes |
 | D. NMPC, rigid contacts, contact mode per foot, acting in every mode | prototype | stable | worse than passive: fights the sole rolling on an edge |
-| **D. same, NMPC only while both soles are flat** | **package: `mpc/model.py`, `estimator.py`, `nmpc.py`, `controller.py`; `scripts/run_stabilizer.py`** | stable | **never worse than passive, better in 2–3 of 10 pushes (2 with the stage-2 PhysX settings)** |
+| **D. same, NMPC only while both soles are flat** | **package until git tag `stage2`: `mpc/model.py`, `estimator.py`, `nmpc.py` (`ContactNMPC`), `controller.py` (`StandingController`); `scripts/run_stabilizer.py`** | stable | **never worse than passive, better in 2–3 of 10 pushes (2 with the stage-2 PhysX settings)** |
 
 Stage 1 is closed with design D in the package; A–C remain only as records here and as prototypes (see *Prototype code*).  Push recovery beyond the passive limit of the soles has to come from stepping (stage 2 on), not from a standing controller.
+
+**Retired after stage 2.** The design-D standing controller (`ContactNMPC`, `StandingController`, `scripts/run_stabilizer.py`) is no longer in the package: straight-leg standing only needs the servos to hold the pose, and every active mode (balancing, stepping) runs at the crouched pose with `RobonionController` / `RobonionNMPC` (see [`stage2.md`](stage2.md)).  Its code is at git tag `stage2`; the files and scripts named in this document refer to that tag.  The results here stay as the record of stage 1.
 
 All results below are Isaac Lab, GPU PhysX, **one environment per process**, one push per run (constant force on `upper_body_link` for 0.05 s at t = 2 s), unless stated otherwise.  Multi-environment runs gave different outcomes than single-environment runs, even for env 0 (see *Pitfalls*), so they are not used for any number here.
 
@@ -174,7 +176,7 @@ q_des⁺ = q_des + q̇ dt
 The 21 actuated joints are legs 10, torso 1, arms 8, head 2; the IK moves only the legs and the torso.
 
 - **Pelvis upright.** Sole pitch always equals pelvis pitch through the two parallelograms, so the 5-D sole tasks leave pelvis pitch free; without this task the IK could tilt the pelvis and both soles together (toes or heels lifting on the real robot).  Roll and yaw keep the upper body level and facing forward.
-- **CoM height, low weight.** `h` is a CoM height, so the height task holds the CoM (not the pelvis) at `h`, matching the constant-height LIPM.  At the straight-leg default pose (`_LEG_CROUCH = 0` in `robots/robonionv2.py`) the height is singular: bending the legs changes it only to second order.  Its weight is kept low (0.1 against 10 for CoM xy) so the IK does not chase an unreachable height with large joint velocities; the CoM drops ≈ 1.3 mm when it shifts ≈ 3 cm.  A crouched default pose would make the height controllable.
+- **CoM height, low weight.** `h` is a CoM height, so the height task holds the CoM (not the pelvis) at `h`, matching the constant-height LIPM.  At the straight-leg default pose (`LEG_CROUCH = 0` in `robots/robonion_params.py`) the height is singular: bending the legs changes it only to second order.  Its weight is kept low (0.1 against 10 for CoM xy) so the IK does not chase an unreachable height with large joint velocities; the CoM drops ≈ 1.3 mm when it shifts ≈ 3 cm.  A crouched default pose would make the height controllable.
 
 #### [E] Safety
 
@@ -324,7 +326,7 @@ Checked on the passive push data with the simulator base orientation as AHRS (2�
 
 Foot slip cannot be observed and is not modelled.
 
-### NMPC (`mpc/nmpc.py`)
+### NMPC (`mpc/nmpc.py` at git tag `stage2`)
 
 acados SQP-RTI, one iteration per tick; x = [q, q̇, u] (37), control u̇ (9); 25 nodes over 0.5 s; output: servo targets.
 

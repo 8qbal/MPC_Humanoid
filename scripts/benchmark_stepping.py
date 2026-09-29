@@ -6,8 +6,8 @@ drivers deliver them), so the controller takes the same path as in the recorded 
 another CPU the targets can differ by rounding, which is reported (the recorded targets are the reference).
 
 Needs no Isaac Sim / Isaac Lab: numpy, casadi, pinocchio, acados_template and the acados libraries
-(ACADOS_SOURCE_DIR, LD_LIBRARY_PATH). The first run generates and compiles the solver and the compiled functions
-into outputs/acados/ (a few minutes on the Jetson).
+(ACADOS_SOURCE_DIR, LD_LIBRARY_PATH). It does not build the controller: run scripts/build_controller.py on the
+target machine first (a few minutes on the Jetson).
 
 Usage:
     uv run python scripts/benchmark_stepping.py run.npz
@@ -19,8 +19,8 @@ import time
 
 import numpy as np
 
+from MPC_Humanoid.mpc.controller import RobonionController
 from MPC_Humanoid.mpc.gait import GaitParams
-from MPC_Humanoid.mpc.stepping import SteppingController
 
 
 def main() -> None:
@@ -33,7 +33,7 @@ def main() -> None:
     t_ss, t_ds, clearance, n_steps = d["params"]
     params = GaitParams(t_ss=float(t_ss), t_ds=float(t_ds), clearance=float(clearance), n_steps=int(n_steps))
     inputs = [d[k].astype(np.float32) for k in ("q_act", "qd_act", "quat", "gyro")]
-    controller = SteppingController(
+    controller = RobonionController(
         list(d["act_names"]), d["q_default_act"].astype(np.float32), float(d["step_dt"]), params
     )
 

@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """
-Rigid-contact model of Robinion for the NMPC (design D in docs/stage1.md).
+Rigid-contact model of Robonion for the NMPC (design D in docs/stage1.md).
 
 q = [base x, y, z, roll, pitch, L hip_roll, L front_thigh, L ankle_pitch, L ankle_roll,
      R hip_roll, R front_thigh, R ankle_pitch, R ankle_roll, torso_pitch]   (14)
@@ -28,7 +28,7 @@ import casadi as ca
 import numpy as np
 import pinocchio as pin
 
-from MPC_Humanoid.robots.servo_params import URDF_LIMITS, XH540_ARMATURE, XH540_DAMPING, XH540_STIFFNESS
+from MPC_Humanoid.robots.robonion_params import URDF_LIMITS, XH540_ARMATURE, XH540_DAMPING, XH540_STIFFNESS
 
 CONTROLLER_URDF = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "../../../../assets/robonionv2_controller.urdf")
@@ -121,15 +121,18 @@ def leaves_edge(mode: str, roll: float, pitch: float) -> bool:
     )
 
 
-def compile_functions(functions: list[ca.Function], prefix: str) -> dict[str, ca.Function]:
+def compile_functions(functions: list[ca.Function], prefix: str, build: bool = False) -> dict[str, ca.Function]:
     """CasADi functions as generated C in one shared library under outputs/acados/. The file name is a hash of
-    the serialized functions, so a changed model never loads a stale build."""
-    from .nmpc import BUILD_DIR
+    the serialized functions, so a changed model never loads a stale build. build: compile the library if it is
+    missing (scripts/build_controller.py); otherwise a missing library is an error."""
+    from .nmpc import BUILD_DIR, BUILD_HINT
 
     key = hashlib.sha1("".join(f.serialize() for f in functions).encode()).hexdigest()[:12]
     name = f"{prefix}_{key}"
     so = os.path.join(BUILD_DIR, f"{name}.so")
     if not os.path.isfile(so):
+        if not build:
+            raise FileNotFoundError(f"{so} not found: {BUILD_HINT}")
         os.makedirs(BUILD_DIR, exist_ok=True)
         cg = ca.CodeGenerator(f"{name}.c")
         for f in functions:
@@ -150,9 +153,10 @@ class RigidContactModel:
         q0_act: np.ndarray,
         alpha: float = 20.0,
         compiled: bool = False,
+        build: bool = False,
     ):
         """compiled: the f_* are generated C (one shared library) instead of the CasADi VM; symbolic users
-        (the NMPC) take the CasADi functions from raw_sx."""
+        (the NMPC) take the CasADi functions from raw_sx. build: see compile_functions."""
         m = pin.buildModelFromUrdf(CONTROLLER_URDF, pin.JointModelFreeFlyer())
         act_names = list(act_names)
         qn = pin.neutral(m)
@@ -262,7 +266,7 @@ class RigidContactModel:
         self.raw_sx = {f.name(): f for f in functions}
         if compiled:
             functions = [f for f in functions if f.name() != "qdd"]  # qdd is only used symbolically / offline
-            functions = list(compile_functions(functions, "robinion_model").values()) + [self.raw_sx["qdd"]]
+            functions = list(compile_functions(functions, "robonion_model", build).values()) + [self.raw_sx["qdd"]]
         for f in functions:
             setattr(self, f"f_{f.name()}", f)
         self.effort = np.array([_effort(n) for n in MODEL_JOINTS])

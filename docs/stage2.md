@@ -11,7 +11,7 @@ Goal: step in place with the design-D NMPC of stage 1 (see [`stage1.md`](stage1.
 | Early / late touchdown | handled up to ±5 mm of ground-height error in Isaac (3 seeds); −10 mm falls |
 | Pushes while stepping (mid single support) | resumes stepping after +1.75 / −1.0 N·s sagittal in all 3 seeds (−1.75 in 2 of 3); lateral ±0.5 and +0.75 / +1.0 N·s in all 3 seeds, −1.0 in 1 of 3; see *Pushes* |
 | Closed | 2026-09-26 by user decision, with the limits under *Open* accepted |
-| Package | `mpc/gait.py`, `mpc/gait_nmpc.py`, `mpc/stepping.py`, `robots/servo_params.py`, `scripts/run_stepping.py`, `scripts/benchmark_stepping.py` |
+| Package | `mpc/gait.py`, `mpc/nmpc.py` (`RobonionNMPC`), `mpc/controller.py` (`RobonionController`), `robots/robonion_params.py`, `scripts/build_controller.py`, `scripts/run_stepping.py`, `scripts/benchmark_stepping.py` |
 
 All Isaac numbers are GPU PhysX with 0 TGS velocity iterations (see *Pitfalls*), **one environment per process**, runs in sequence (as in stage 1); package results are given for sensor-noise seeds 0, 1, 2.
 
@@ -21,8 +21,8 @@ One layer: the design-D NMPC is the whole-body tracker; a gait scheduler supplie
 
 ```text
 encoders + AHRS + gyro -> AhrsGyro -> ContactModeMonitor -> ContactProjectionEstimator -> (q, qd, modes)
-gait plan (gait.py) -> per-node modes, DCM / CoM velocity, swing-sole target -> gait logic (stepping.py)
-  -> GaitNMPC (acados SQP-RTI, split preparation / feedback) -> servo targets of the 9 model joints
+gait plan (gait.py) -> per-node modes, DCM / CoM velocity, swing-sole target -> gait logic (controller.py)
+  -> RobonionNMPC (acados SQP-RTI, split preparation / feedback) -> servo targets of the 9 model joints
 ```
 
 Node 0 of the contact plan is always the measured mode; later nodes follow the plan.  Edge modes are never planned.
@@ -33,22 +33,22 @@ Numbers from the package `RigidContactModel` (linearised, before any Isaac run):
 
 | Question | Result |
 |---|---|
-| Swing clearance with straight legs (`_LEG_CROUCH = 0`) | 3 cm needs 0.39 rad on front thigh and ankle pitch together; with a 0.15 s lift phase ≈ 4.9 rad/s, above the 4.08 rad/s servo limit.  Straight legs are also singular for leg length (stage 1) |
-| Same with a 0.2 rad crouch (both joints, negative sign as `_LEG_CROUCH`) | 2 cm: 0.18 rad, 3 cm: 0.24 rad; pelvis 8 mm lower, CoM height 0.475 m (ω = 4.55 s⁻¹) |
+| Swing clearance with straight legs (`LEG_CROUCH = 0`) | 3 cm needs 0.39 rad on front thigh and ankle pitch together; with a 0.15 s lift phase ≈ 4.9 rad/s, above the 4.08 rad/s servo limit.  Straight legs are also singular for leg length (stage 1) |
+| Same with a 0.2 rad crouch (both joints, negative sign as `LEG_CROUCH`) | 2 cm: 0.18 rad, 3 cm: 0.24 rad; pelvis 8 mm lower, CoM height 0.475 m (ω = 4.55 s⁻¹) |
 | Modes, double support, crouch 0.2 | 1.07 Hz, 1.73 Hz (ζ 0.3–0.4) |
 | Modes, single support, CoM over the stance sole | 0.22 Hz (ζ 0.3, nearly neutral), 1.1 Hz, 1.5 Hz, 2.3–2.8 Hz (ζ 0.7–0.9); no unstable eigenvalue |
 | Stance hip roll in single support | 5 N·m static (63 % of 0.8 × 9.9 N·m), 6.8° sag; uncompensated targets would drop the swing hip ≈ 13 mm |
 | Lateral CoM sway (periodic LIPM, ZMP at the sole centres) | T_ss/T_ds 0.3/0.1 s: ±16 mm; 0.35/0.1: ±19 mm; 0.4/0.1: ±22 mm; 0.6/0.2: ±36 mm.  The ZMP moves ±55 mm, the CoM does not have to |
 
-Chosen (user decision): crouch 0.2 rad ramped by the controller after start (`_LEG_CROUCH` stays 0, so the stage-1 tables still hold), **T_ss 0.30 s, T_ds 0.10 s** (sway 1.25 Hz and steps 2.5 Hz avoid the 1.1 Hz and 1.5–1.7 Hz modes; 0.45–0.5 s steps would sway at 1.0–1.1 Hz), clearance 2 cm (3 cm also works), step width 0.110 m (the standing width).  0.6/0.2 s is the tested fallback.
+Chosen (user decision): crouch 0.2 rad ramped by the controller after start (`LEG_CROUCH` in `robots/robonion_params.py` stays 0, so the stage-1 tables still hold), **T_ss 0.30 s, T_ds 0.10 s** (sway 1.25 Hz and steps 2.5 Hz avoid the 1.1 Hz and 1.5–1.7 Hz modes; 0.45–0.5 s steps would sway at 1.0–1.1 Hz), clearance 2 cm (3 cm also works), step width 0.110 m (the standing width).  0.6/0.2 s is the tested fallback.
 
 ## Gait plan (`mpc/gait.py`)
 
 Stand (1.5 s) → DS (ZMP from the middle of the soles to the first stance sole) → SS → DS → … → DS (ZMP back to the middle) → stand.  ZMP constant in single support, linear in double support; the DCM is integrated backwards in closed form from rest at the end (ξ̇ = ω(ξ − p)), the CoM forwards from rest at the start (ċ = ω(ξ − c)).  Checked numerically: ODE residual 3e-6 m/s (CoM), CoM at rest at both ends within 0.4 mm.  Swing sole height `z = h · 64 s³(1 − s)³` (zero velocity and acceleration at both ends); with the crouch, 2 cm needs 1.99 rad/s peak joint rate (49 % of the limit).  `stretch()` lengthens or shortens one phase and moves the later ones (retiming, pauses); a phase stretched beyond its planned duration keeps its sole reference descending at 0.1 m/s.
 
-## NMPC (`mpc/gait_nmpc.py`)
+## NMPC (`mpc/nmpc.py`, `RobonionNMPC`)
 
-Same model, dynamics, constraints and weights as `mpc/nmpc.py`, plus:
+Same model, dynamics, constraints and weights as the stage-1 NMPC (25 nodes, retired; code at git tag `stage2`), plus:
 
 - per-node references as parameters: DCM, CoM velocity, swing-sole position (all nodes written with one `set_flat`);
 - per-node gates: leg-length cost only for feet in contact, swing-position cost only for feet in the air, the 5 N minimum normal force only for feet in contact — all constraint bounds are then constant;
@@ -72,11 +72,11 @@ Offline (HybridSim, 2 cm, per controller tick on the desktop), then Isaac with t
 
 The 16-node grid behaves like 25 nodes (CoM sway, peak torque 58 %, landing timing).  Non-uniform grids (8 × 20 ms + 8 × 42.5 ms, 12 × 20 + 6 × 43.3, 10 × 25 + 6 × 41.7) are faster but raised the torso torque to 140–174 % of the servo limit and one fell: the weights are tuned for uniform intervals (acados scales the stage cost by the interval).  Full condensing was slower (QP 8 ms).
 
-The compiled functions are generated into `outputs/acados/` as one shared library each, named by a hash of the functions, so a changed model never loads a stale build.  Servo constants live in `robots/servo_params.py` (no Isaac imports), so `mpc/` and the benchmark run on a machine without Isaac Sim.  Not yet measured on the Jetson AGX Orin (see the next section).
+`scripts/build_controller.py` (no Isaac) generates and compiles the compiled functions (one shared library each), the contact algebra (`alg.so`) and the acados solver into `outputs/acados/`; `run_stepping.py` and `benchmark_stepping.py` only load them and stop with `FileNotFoundError` when a build is missing.  Every build is named by a hash of what it computes (the functions; for the solver folder `robonion_nmpc_<hash>` the OCP expressions and numbers), so a changed model never loads a stale build.  The controller rounds its crouched pose to 6 decimals (`nominal_pose`), so the float32 default pose from Isaac builds the same model as the exact one of the build script.  Servo constants and the default pose live in `robots/robonion_params.py` (no Isaac imports), so `mpc/` and the benchmark run on a machine without Isaac Sim.  Not yet measured on the Jetson AGX Orin (see the next section).
 
 ### Benchmark on the Jetson AGX Orin
 
-`scripts/benchmark_stepping.py` times the controller without Isaac by replaying a recorded run: every tick gets the recorded encoder, AHRS and gyro values (float32, as delivered), so the controller takes the same path as in Isaac (open loop).  The controller stack (`mpc/`, `robots/servo_params.py`) imports without Isaac Lab, Isaac Sim and torch (checked with those imports blocked).
+`scripts/benchmark_stepping.py` times the controller without Isaac by replaying a recorded run: every tick gets the recorded encoder, AHRS and gyro values (float32, as delivered), so the controller takes the same path as in Isaac (open loop).  The controller stack (`mpc/`, `robots/robonion_params.py`) imports without Isaac Lab, Isaac Sim and torch (checked with those imports blocked).
 
 **1. Record on the desktop (Isaac):**
 
@@ -87,14 +87,14 @@ uv run python scripts/run_stepping.py --push x+1.75 --record run_push.npz   # al
 
 The regression recordings can be used as they are (`outputs/final2/*.npz`, e.g. `s0_steps20_h30.npz`).
 
-**2. Copy to the Jetson:** the repository (at least `source/MPC_Humanoid/`, `scripts/benchmark_stepping.py`, `assets/robonionv2_controller.urdf`) and the `.npz` files.  `outputs/` is not needed; the solver and the compiled functions are built there on the Jetson.
+**2. Copy to the Jetson:** the repository (at least `source/MPC_Humanoid/`, `scripts/benchmark_stepping.py`, `assets/robonionv2_controller.urdf`) and the `.npz` files.  `outputs/` is not needed; the solver and the compiled functions are built there on the Jetson (step 4).
 
 **3. Python environment on the Jetson.** The project's `uv` environment pulls in `isaaclab[isaacsim]`, which does not exist for the Jetson, so use a separate one with only what the controller needs (not tried on the Jetson yet):
 
 ```bash
-uv venv ~/robinion-venv --python 3.12
-uv pip install --python ~/robinion-venv numpy scipy casadi pin
-uv pip install --python ~/robinion-venv -e ~/acados/interfaces/acados_template
+uv venv ~/robonion-venv --python 3.12
+uv pip install --python ~/robonion-venv numpy scipy casadi pin
+uv pip install --python ~/robonion-venv -e ~/acados/interfaces/acados_template
 ```
 
 acados itself has to be built from source on the Jetson (`~/acados`, as on the desktop).  `acados_template` renders the solver code with the `t_renderer` binary, which it downloads for x86 only; on the Jetson build it from source (tera_renderer, Rust) and put it into `~/acados/bin`.
@@ -104,22 +104,23 @@ acados itself has to be built from source on the Jetson (`~/acados`, as on the d
 ```bash
 sudo nvpmodel -m 0 && sudo jetson_clocks        # maximum clocks; note the power mode with the result
 export ACADOS_SOURCE_DIR=$HOME/acados LD_LIBRARY_PATH=$HOME/acados/lib
-PYTHONPATH=source/MPC_Humanoid ~/robinion-venv/bin/python scripts/benchmark_stepping.py run_20x30.npz --repeat 3
+PYTHONPATH=source/MPC_Humanoid ~/robonion-venv/bin/python scripts/build_controller.py   # once, a few minutes
+PYTHONPATH=source/MPC_Humanoid ~/robonion-venv/bin/python scripts/benchmark_stepping.py run_20x30.npz --repeat 3
 ```
 
-The first run generates and compiles the solver and the compiled estimation functions into `outputs/acados/` (a few minutes); time only the runs after it.
+The benchmark does not build anything; without the build step it stops with `FileNotFoundError`.
 
 **5. Reading the output:**
 
 | Line | Meaning | Desktop reference (`s0_steps20_h30.npz`, `--repeat 2`) |
 |---|---|---|
-| `tick (estimation + NMPC) mean, p50, p95, p99, max; over budget` | wall time of `SteppingController.step()` per tick, and the share of ticks over the 5 ms tick | 3.78, 3.73, 4.29, 6.18, 8.51 ms; 2.0 % |
+| `tick (estimation + NMPC) mean, p50, p95, p99, max; over budget` | wall time of `RobonionController.step()` per tick, and the share of ticks over the 5 ms tick | 3.78, 3.73, 4.29, 6.18, 8.51 ms; 2.0 % |
 | `acados solve time per tick` | the NMPC feedback solve alone | 1.10 mean, 1.39 p95 |
 | `max \|servo target - recorded\|` | difference to the targets of the recorded run; rounding only (≈ 1e-6 rad or less).  A large value means the replay took another path and the timing is not comparable | 0 |
 
 The budget is met when p95 stays below 5 ms and the ticks over budget stay rare (a late tick holds the previous targets for one more 5 ms).
 
-## Controller logic (`mpc/stepping.py`)
+## Controller logic (`mpc/controller.py`, `RobonionController`)
 
 Timeline: 0–0.5 s standing at the default pose, 0.5–1.3 s crouch ramp, 1.5–2.0 s AHRS bias calibration (both soles flat), gait from 2.0 s.
 
@@ -133,7 +134,7 @@ Timeline: 0–0.5 s standing at the default pose, 0.5–1.3 s crouch ramp, 1.5�
 | Sole resting still on an edge (tilt span < 0.3° over 0.2 s) | targets move to the standing posture at 0.5 rad/s | After pushes the soles can rest on their outer edges indefinitely; the monitor only returns to `flat` when the tilt crosses zero.  Resuming the NMPC with the sole planned flat rolled it again within ~50 ms |
 | After any hold with both feet down | NMPC stands as in stage 1 (every node flat, DCM to the middle, CoM at rest), plan paused, until DCM < 10 mm from the middle and CoM speed < 0.03 m/s for 0.2 s | Resuming the plan right away (its DCM reference is a moving ZMP) re-tipped the soles |
 
-The rules are a state machine (`State` in `stepping.py`: STEP, HOLD, RESET, CATCH, RECOVER; the contact modes of each tick select the next state).  It replaced the equivalent chain of flags and gave the same servo targets (0 rad difference) on 14 recorded runs that pass through all five states.
+The rules are a state machine (`State` in `controller.py`: STEP, HOLD, RESET, CATCH, RECOVER; the contact modes of each tick select the next state).  It replaced the equivalent chain of flags and gave the same servo targets (0 rad difference) on 14 recorded runs that pass through all five states.
 
 ### Edge detection while stepping
 
@@ -219,9 +220,9 @@ Cause: kinematics under load that the model does not see, in three parts of ≈ 
 
 ## Pitfalls found
 
-- A solver found in its build folder is loaded without rebuilding: the package solver `robinion_stepping_n16` carries the node count in its name after a stale prototype build of the same name crashed the compiled contact algebra (wrong dimension).
+- A solver found in its build folder is loaded without rebuilding: a stale prototype build of the same name once crashed the compiled contact algebra (wrong dimension), and a solver folder shared by name was overwritten when the default pose arrived as float32 (−0.20000000298 instead of −0.2 changed the acados hash), so the next run looked for a `.so` that did not exist.  Hence the separate build: the solver folder is named `robonion_nmpc_<hash>` from the OCP expressions and numbers, and the crouched pose is rounded to 6 decimals.
 - **PhysX TGS velocity iterations change the joint velocities after the positions are integrated**: with 4 (the default before), a sole lying flat read up to 3.6°/s of tilt rate from encoders + gyro while weight moved (the simulator state gives the same wrong rate, so it is the simulator, not the estimator); with 0 it is 0.55°/s.  `robots/robonionv2.py` now sets `solver_velocity_iteration_count=0`.  This changes the dynamics slightly: in stage 1, 19 of 20 push outcomes stayed the same (−y 2.25 now falls, see `stage1.md`); while stepping, −x 1.75 and −x 2.0 became marginal (next section).
-- Results near a limit depend on the sensor-noise realization (AHRS bias, gyro noise): one run per push is not enough.  Every table here uses seeds 0, 1, 2 (`--seed` in `run_stepping.py`, `run_stabilizer.py`, `isaac_gait.py`).
+- Results near a limit depend on the sensor-noise realization (AHRS bias, gyro noise): one run per push is not enough.  Every table here uses seeds 0, 1, 2 (`--seed` in `run_stepping.py`, `isaac_gait.py`).
 - A touchdown reads as a 12–19°/s sole tilt rate on a single tick at ≈ 0° tilt (Isaac impact, gyro + encoders); a one-tick rate or predicted-tilt trigger takes it for an edge.
 - The monitor returns an edge to `flat` only when the tilt crosses zero; a sole resting tilted keeps its mode forever.
 - Editing prototype files while a batch of Isaac runs imports them breaks the later runs of the batch (a broken docstring once killed six runs silently).
@@ -230,7 +231,7 @@ Cause: kinematics under load that the model does not see, in three parts of ≈ 
 ## Open
 
 - Contact-mode monitor thresholds (0.2°, 15 ms lead, 2 ticks) and the estimator were tuned in Isaac, including simulator artefacts (touchdown spike, false tilt rate): check them on the robot (standing, slow stepping) before relying on them.
-- Jetson AGX Orin timing: record a run on the desktop (`scripts/run_stepping.py --record run.npz`), replay it on the Jetson with `scripts/benchmark_stepping.py run.npz` (no Isaac needed).
+- Jetson AGX Orin timing: record a run on the desktop (`scripts/run_stepping.py --record run.npz`), build and replay it on the Jetson with `scripts/build_controller.py` and `scripts/benchmark_stepping.py run.npz` (no Isaac needed).
 - Lateral push recovery while stepping needs footstep adaptation (stage 3).
 - Landing drift ≈ 0.31 mm per step: needs pelvis yaw in the model (walking / turning stage).
 - Ground-height errors beyond ±5 mm (−10 mm falls).
@@ -238,7 +239,7 @@ Cause: kinematics under load that the model does not see, in three parts of ≈ 
 
 ## Prototype code
 
-In `outputs/stage2_prototypes/` (git-ignored scratch), run from that folder with `uv run --project ../.. python <script>`:
+In `outputs/stage2_prototypes/` (git-ignored scratch), run from that folder with `uv run --project ../.. python <script>`.  They import the package modules as they were before the rename to `nmpc.py` / `controller.py` / `robonion_params.py`, so they only run with the package at git tag `stage2` (check that tag out first):
 
 | File | Content |
 |---|---|

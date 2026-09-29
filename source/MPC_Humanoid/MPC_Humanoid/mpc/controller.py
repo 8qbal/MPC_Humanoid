@@ -4,13 +4,13 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """
-Stage-2 controller: stepping in place (docs/stage2.md).
+Robonion controller: balance and stepping in place at the crouched pose (docs/stage2.md).
 
 Timeline: standing at the default pose, crouch ramp (straight legs are singular and too slow for the swing),
-AHRS bias calibration with both soles flat, then the gait plan (gait.py) runs through GaitNMPC every tick.
+AHRS bias calibration with both soles flat, then the gait plan (gait.py) runs through RobonionNMPC every tick.
 
 Every tick: AHRS/gyro -> contact modes (ContactModeMonitor) -> state (ContactProjectionEstimator) -> gait logic
--> GaitNMPC -> servo targets of the 9 model joints; the other actuated joints hold their defaults. Node 0 of the
+-> RobonionNMPC -> servo targets of the 9 model joints; the other actuated joints hold their defaults. Node 0 of the
 contact plan is the measured mode, later nodes follow the gait plan. The gait logic is a state machine (State),
 each rule justified by an Isaac failure in docs/stage2.md; within STEP:
 
@@ -30,11 +30,10 @@ import numpy as np
 
 from .estimator import AhrsGyro, ContactModeMonitor, ContactProjectionEstimator
 from .gait import GaitParams, GaitPlan
-from .gait_nmpc import GaitNMPC
 from .model import EDGE_MODES, MODEL_JOINTS, RigidContactModel, contact_config
-from .nmpc import U_RATE_MAX
+from .nmpc import U_RATE_MAX, RobonionNMPC
 
-CROUCH = 0.2  # rad on front thigh and ankle pitch (negative, the _LEG_CROUCH convention of robots/robonionv2.py)
+CROUCH = 0.2  # rad on front thigh and ankle pitch (negative, the LEG_CROUCH convention of robots/robonion_params.py)
 CROUCH_START, CROUCH_TIME = 0.5, 0.8  # s
 CALIBRATION_START, GAIT_START = 1.5, 2.0  # s; AHRS bias averaged in between, both soles flat
 # Edge detection by predicted tilt (ContactModeMonitor lead): 15 ms ahead, as early as the stage-1 rate trigger
@@ -82,8 +81,18 @@ class State(Enum):
 HELD = (State.HOLD, State.RESET, State.CATCH)
 
 
+def nominal_pose(act_names: list[str], q_default_act: np.ndarray) -> np.ndarray:
+    """Crouched pose of the actuated joints, rounded to 6 decimals [rad]: a float32 default pose (-0.20000000298
+    instead of -0.2) then builds the same model and solver as scripts/build_controller.py."""
+    q = np.asarray(q_default_act, dtype=float).copy()
+    for i, n in enumerate(act_names):
+        if n.endswith(("front_thigh_pitch_joint", "ankle_pitch_joint")):
+            q[i] -= CROUCH
+    return np.round(q, 6)
+
+
 @dataclass
-class SteppingStatus:
+class ControllerStatus:
     modes: list[str]
     # contact mode per foot (left, right)
     q: np.ndarray | None
@@ -100,29 +109,28 @@ class SteppingStatus:
     # gait state of this tick
 
 
-class SteppingController:
+class RobonionController:
     def __init__(
         self,
         act_names: list[str],
         q_default_act: np.ndarray,
         dt: float,
         params: GaitParams | None = None,
-        build: bool | None = None,
+        build: bool = False,
     ):
+        """build: generate and compile the C functions and the NMPC solver (scripts/build_controller.py); otherwise
+        they are loaded and a missing build is an error."""
         self.act_names = list(act_names)
         self.q_default = np.asarray(q_default_act, dtype=float).copy()
-        self.q_crouch = self.q_default.copy()
-        for i, n in enumerate(self.act_names):
-            if n.endswith(("front_thigh_pitch_joint", "ankle_pitch_joint")):
-                self.q_crouch[i] -= CROUCH
+        self.q_crouch = nominal_pose(self.act_names, self.q_default)
         self.dt = dt
         self.params = params or GaitParams()
         self.ind = [self.act_names.index(n) for n in MODEL_JOINTS]
-        self.model = RigidContactModel(self.act_names, self.q_crouch, compiled=True)
-        self.ahrs = AhrsGyro(self.act_names, compiled=True)
+        self.model = RigidContactModel(self.act_names, self.q_crouch, compiled=True, build=build)
+        self.ahrs = AhrsGyro(self.act_names, compiled=True, build=build)
         self.monitor = ContactModeMonitor(self.model, lead=MONITOR_LEAD, rate_ticks=MONITOR_TICKS)
-        self.estimator = ContactProjectionEstimator(self.model, compiled=True)
-        self.nmpc = GaitNMPC(self.model, build=build)
+        self.estimator = ContactProjectionEstimator(self.model, compiled=True, build=build)
+        self.nmpc = RobonionNMPC(self.model, build=build)
         self.reset()
 
     def reset(self):
@@ -141,7 +149,7 @@ class SteppingController:
         self._airborne: set[int] = set()
         self.state, self._hold_since = State.STEP, None
         self._calm, self._tilt_hist, self._prepared = 0.0, [], None
-        self.status = SteppingStatus(["flat", "flat"], None, None, None, False, None, None, self.state)
+        self.status = ControllerStatus(["flat", "flat"], None, None, None, False, None, None, self.state)
 
     def step(self, q_act: np.ndarray, qd_act: np.ndarray, imu_quat_xyzw: np.ndarray, gyro: np.ndarray) -> np.ndarray:
         """One control tick. Returns joint position targets for the actuated joints."""
@@ -179,7 +187,7 @@ class SteppingController:
             u, qp_status, solve_time = u
         self.u = u
         self.q_des[self.ind] = self.u
-        self.status = SteppingStatus(list(modes), q, qd, tp, self.state in HELD, solve_time, qp_status, self.state)
+        self.status = ControllerStatus(list(modes), q, qd, tp, self.state in HELD, solve_time, qp_status, self.state)
         return self.q_des
 
     def _start(self):

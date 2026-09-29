@@ -1,8 +1,8 @@
-# Isaac Lab MPC Plan for Robinion Humanoid Movement
+# Isaac Lab MPC Plan for Robonion Humanoid Movement
 
 ## Goal and scope
 
-Build a simulation-first, receding-horizon controller for the Robinion v2 humanoid in Isaac Lab.  The first usable milestone is stable standing and commanded planar walking on a flat floor; rough terrain, vision, and hardware deployment are later milestones.
+Build a simulation-first, receding-horizon controller for the Robonion v2 humanoid in Isaac Lab.  The first usable milestone is stable standing and commanded planar walking on a flat floor; rough terrain, vision, and hardware deployment are later milestones.
 
 The controller must respect the robot's floating base, contact forces, actuator torque/speed limits, joint limits, and the two parallelogram leg mechanisms.  It must control only independent actuated coordinates: hip yaw, hip roll, front-thigh pitch (hip pitch motor), ankle pitch (ankle pitch motor), ankle roll, torso, and optionally arms.  The passive four-bar joints (`*_back_thigh_pitch`, `*_knee_pitch`, `*_front_shin_pitch`, `*_back_shin_pitch`) remain uncommanded and are constrained by the USD loop closures -- note `front_shin_pitch`, not `ankle_pitch`, is the passive one; the ankle-pitch motor drives the shin parallelogram from its distal end (user-confirmed, see `references/docs/joint_info.md`).
 
@@ -32,7 +32,7 @@ Success metrics: maximum recoverable push impulse (N·s) per direction, velocity
 
 ### Stage 1 status: done (design D)
 
-Full record of everything tried, with numbers: [`docs/stage1.md`](stage1.md).  Designs A (DCM MPC + LIPM + IK), B (NMPC on a flat-foot reduced model) and C (NMPC on a soft-contact model) stood at best as well against pushes as the passive robot.  Design D, an NMPC on a rigid-contact floating-base model with a contact mode per foot, is in the package (`source/MPC_Humanoid/MPC_Humanoid/mpc/`, run by `scripts/run_stabilizer.py`).  It runs only while both soles are flat and holds the servo targets while a sole rolls on an edge or a foot is in the air, where the passive robot recovers better than the NMPC.  Single-push table in Isaac (GPU PhysX, one env per process):
+Full record of everything tried, with numbers: [`docs/stage1.md`](stage1.md).  Designs A (DCM MPC + LIPM + IK), B (NMPC on a flat-foot reduced model) and C (NMPC on a soft-contact model) stood at best as well against pushes as the passive robot.  Design D, an NMPC on a rigid-contact floating-base model with a contact mode per foot, was in the package (`source/MPC_Humanoid/MPC_Humanoid/mpc/`, `ContactNMPC` / `StandingController`, run by `scripts/run_stabilizer.py`) until stage 2; it is retired (straight-leg standing only needs the servos to hold the pose; balancing and stepping run crouched with `RobonionController`) and its code is at git tag `stage2`.  It ran only while both soles were flat and held the servo targets while a sole rolled on an edge or a foot was in the air, where the passive robot recovers better than the NMPC.  Single-push table (kept as the stage-1 record) in Isaac (GPU PhysX, one env per process):
 
 | Push (N·s) | +x 2.5 | +x 3.0 | +x 3.5 | −x 1.75 | −x 2.0 | −x 2.5 | +y 2.0 | +y 2.5 | −y 2.25 | −y 2.5 |
 |---|---|---|---|---|---|---|---|---|---|---|
@@ -43,7 +43,7 @@ Never worse than the passive robot, better in two to three cases; larger pushes 
 
 ### Stage 2 status: done (stepping in place)
 
-Full record: [`docs/stage2.md`](stage2.md).  One layer: the design-D NMPC with a contact plan from a gait scheduler (T_ss 0.3 s, T_ds 0.1 s, 2 cm clearance, 0.2 rad crouch), a closed-form DCM reference and a swing spline as cost references (`mpc/gait.py`, `mpc/gait_nmpc.py`, `mpc/stepping.py`, `scripts/run_stepping.py`).  In Isaac, with the estimator only: 20 steps at 2 and 3 cm without a fall; early and late touchdowns retime the plan (±5 mm of ground-height error handled); one tick ≈ 4.3 ms on the desktop (compiled contact algebra and estimation, split RTI, 16 nodes), measurement-to-target latency ≈ 1.3 ms.  Pushes in the middle of single support (3 noise seeds): stepping resumes after +1.75 / −1.0 N·s sagittal (−1.75 in 2 of 3) and ±0.5 / +1.0 N·s lateral; lateral push recovery needs footstep adaptation (stage 3).  Open: Jetson timing, hardware check of the contact-mode monitor, ≈ 0.3 mm forward landing drift per step.
+Full record: [`docs/stage2.md`](stage2.md).  One layer: the design-D NMPC with a contact plan from a gait scheduler (T_ss 0.3 s, T_ds 0.1 s, 2 cm clearance, 0.2 rad crouch), a closed-form DCM reference and a swing spline as cost references (`mpc/gait.py`, `mpc/nmpc.py` `RobonionNMPC`, `mpc/controller.py` `RobonionController`, built by `scripts/build_controller.py`, run by `scripts/run_stepping.py`).  In Isaac, with the estimator only: 20 steps at 2 and 3 cm without a fall; early and late touchdowns retime the plan (±5 mm of ground-height error handled); one tick ≈ 4.3 ms on the desktop (compiled contact algebra and estimation, split RTI, 16 nodes), measurement-to-target latency ≈ 1.3 ms.  Pushes in the middle of single support (3 noise seeds): stepping resumes after +1.75 / −1.0 N·s sagittal (−1.75 in 2 of 3) and ±0.5 / +1.0 N·s lateral; lateral push recovery needs footstep adaptation (stage 3).  Open: Jetson timing, hardware check of the contact-mode monitor, ≈ 0.3 mm forward landing drift per step.
 
 ### Design A analysis (historical)
 
@@ -111,8 +111,8 @@ Use OSQP (or `qpsolvers`) for the MPC and IK QPs and Pinocchio for kinematics; b
 ## Phase 0 — Freeze interfaces and validate the simulation model
 
 1. Read and preserve the asset workflow in `AGENTS.md` and `references/docs/joint_info.md`; do not regenerate `assets/robonionv2.usd` unless the asset pipeline is deliberately being changed.
-2. Replace the cart-pole placeholder task with a Robinion-specific direct or manager-based environment.  The scene must load `ROBINION_CFG`, a flat ground plane, and deterministic physics settings.
-3. Create one authoritative `RobinionModelSpec` containing the ordered independent actuated joints, passive joints, foot body names, pelvis body name, nominal standing pose, limits, torque/speed limits, foot sole dimensions, mass, and control periods.  Reuse it in task configuration, observation extraction, MPC, WBC, and tests to prevent ordering errors.
+2. Replace the cart-pole placeholder task with a Robonion-specific direct or manager-based environment.  The scene must load `Robonion_CFG`, a flat ground plane, and deterministic physics settings.
+3. Create one authoritative `RobonionModelSpec` containing the ordered independent actuated joints, passive joints, foot body names, pelvis body name, nominal standing pose, limits, torque/speed limits, foot sole dimensions, mass, and control periods.  Reuse it in task configuration, observation extraction, MPC, WBC, and tests to prevent ordering errors.
 4. Add a headless smoke script that spawns one robot, resets it to the crouch pose, steps for 10 seconds under gravity, and reports NaNs, joint-limit violations, base height, and contact forces.
 5. Verify physically before controller work: correct left/right foot contacts, no self-collision explosions, stable passive-link loop closure, correct base frame convention (X forward/Y left/Z up), and expected total mass.  Record baseline traces and solver/physics version.
 
@@ -173,7 +173,7 @@ Use OSQP (or `qpsolvers`) for the MPC and IK QPs and Pinocchio for kinematics; b
 source/MPC_Humanoid/MPC_Humanoid/
   robots/robonionv2.py                 # retain asset + actuator configuration
   tasks/mpc_humanoid/
-    config/robinion/                   # real Isaac Lab task and physics presets
+    config/robonion/                   # real Isaac Lab task and physics presets
     mdp/                                # observations, actions, events, terminations
   mpc/
     model_spec.py                       # one joint/body/contact source of truth
@@ -196,7 +196,7 @@ tests/
   test_mpc_integration.py
 ```
 
-Keep the generated cart-pole configuration isolated until the Robinion task is registered and its smoke tests pass; then retire or rename the placeholder registration so users cannot accidentally run it as the humanoid task.
+Keep the generated cart-pole configuration isolated until the Robonion task is registered and its smoke tests pass; then retire or rename the placeholder registration so users cannot accidentally run it as the humanoid task.
 
 ## Decisions required before implementation
 

@@ -1,6 +1,6 @@
-# Robinion — Joint & Link Reference
+# Robonion — Joint & Link Reference
 
-Reference sheet for building the Robinion `ArticulationCfg` in `source/MPC_Humanoid`.
+Reference sheet for building the Robonion `ArticulationCfg` in `source/MPC_Humanoid`.
 
 ## Sources
 

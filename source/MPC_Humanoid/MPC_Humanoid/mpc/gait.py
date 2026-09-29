@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """
-Gait plan for stepping in place (stage 2 in docs/stage2.md): contact schedule, DCM / CoM reference and swing-foot
+Gait plan for stepping in place: contact schedule, DCM / CoM reference and swing-foot
 height.
 
 Timeline: stand -> DS (ZMP from the middle of the soles to the first stance sole) -> SS -> DS -> ... -> SS ->

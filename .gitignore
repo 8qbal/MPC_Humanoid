@@ -7,6 +7,7 @@
 
 logs/
 outputs/
+artifacts/
 videos/
 wandb/
 

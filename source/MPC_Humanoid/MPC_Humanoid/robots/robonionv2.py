@@ -8,7 +8,8 @@ import isaaclab.sim as sim_utils
 from isaaclab.actuators import DCMotorCfg, ImplicitActuatorCfg
 from isaaclab.assets import ArticulationCfg
 
-from .servo_params import (
+from .robonion_params import (
+    DEFAULT_JOINT_POS,
     URDF_FRICTION,
     URDF_LIMITS,
     XH430_ARMATURE,
@@ -20,11 +21,6 @@ from .servo_params import (
 )
 
 MPC_HUMANOID_ASSETS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../assets"))
-
-# 0 rad for standing more than 0 will crouch
-_LEG_CROUCH = 0.0  # rad
-# set 0 for tpose, -1.4 for arm down initialize
-_SHOULDER_ROLL_DOWN = -1.0  # rad
 
 Robonion_CFG = ArticulationCfg(
     prim_path="{ENV_REGEX_NS}/Robot",
@@ -51,22 +47,7 @@ Robonion_CFG = ArticulationCfg(
     ),
     init_state=ArticulationCfg.InitialStateCfg(
         pos=(0.0, 0.0, 0.56),
-        joint_pos={
-            ".*_front_thigh_pitch_joint": -_LEG_CROUCH,
-            ".*_back_thigh_pitch_joint": -_LEG_CROUCH,
-            ".*_knee_pitch_joint": _LEG_CROUCH,
-            ".*_front_shin_pitch_joint": _LEG_CROUCH,
-            ".*_back_shin_pitch_joint": _LEG_CROUCH,
-            ".*_ankle_pitch_joint": -_LEG_CROUCH,
-            ".*_hip_yaw_joint": 0.0,
-            ".*_hip_roll_joint": 0.0,
-            ".*_ankle_roll_joint": 0.0,
-            "torso_pitch_joint": 0.0,
-            "head_.*_joint": 0.0,
-            ".*_shoulder_pitch_joint": 0.0,
-            ".*_shoulder_roll_joint": _SHOULDER_ROLL_DOWN,
-            ".*_elbow_.*_joint": 0.0,
-        },
+        joint_pos=DEFAULT_JOINT_POS,
         joint_vel={".*": 0.0},
     ),
     soft_joint_pos_limit_factor=0.9,

@@ -1,4 +1,4 @@
-"""Run the stage-2 stepping-in-place controller in the Robinion env, optionally with one push while stepping.
+"""Run the stage-2 stepping-in-place controller in the Robonion env, optionally with one push while stepping.
 
 The controller only sees what the real robot measures (joint encoders, AHRS orientation, gyro): it crouches,
 calibrates the AHRS bias, then steps in place (docs/stage2.md). The push (constant force on upper_body_link) comes
@@ -6,8 +6,8 @@ in the middle of the 5th single support (--push_at mid_ss) or of the double supp
 ground truth (sole heights, foot displacement, root height) is read for scoring only. Use one env per process:
 multi-env runs of this asset differ from single-env runs (see docs/stage1.md).
 
-The first run builds the acados solver (~3 min, into outputs/acados/); acados needs ACADOS_SOURCE_DIR and
-LD_LIBRARY_PATH (see README).
+The controller must be built first (scripts/build_controller.py, no Isaac); this script only loads it. acados needs
+ACADOS_SOURCE_DIR and LD_LIBRARY_PATH (see README).
 
 Usage:
     uv run python scripts/run_stepping.py                            # 10 steps, 2 cm clearance
@@ -47,9 +47,9 @@ import torch
 from isaaclab.envs import ManagerBasedEnv
 
 from MPC_Humanoid.env import MpcHumanoidRobonionEnvCfg
+from MPC_Humanoid.mpc.controller import RobonionController
 from MPC_Humanoid.mpc.gait import GaitParams
 from MPC_Humanoid.mpc.model import SOLE_CORNERS
-from MPC_Humanoid.mpc.stepping import SteppingController
 
 H_AIR = 0.001  # m, lowest sole corner above its standing height: the foot is in the air (scoring only)
 
@@ -75,7 +75,7 @@ def main() -> None:
     torso = body_names.index("upper_body_link")
 
     params = GaitParams(t_ss=args.t_ss, t_ds=args.t_ds, clearance=args.clearance, n_steps=args.steps)
-    controller = SteppingController(act_names, q_default_act, env.step_dt, params)
+    controller = RobonionController(act_names, q_default_act, env.step_dt, params)
 
     def sole_lows(pose):
         lows = []

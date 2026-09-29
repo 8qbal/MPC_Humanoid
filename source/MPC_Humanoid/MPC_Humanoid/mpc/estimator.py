@@ -36,9 +36,10 @@ class AhrsGyro:
     """Pelvis roll/pitch (model convention R = Ry(pitch) Rx(roll), yaw removed) and their rates from the
     AHRS quaternion, the gyro and the encoders. The IMU sits on upper_body_link, behind torso_pitch.
 
-    compiled: the same computation as one generated C function (Pinocchio took ~0.2 ms per tick)."""
+    compiled: the same computation as one generated C function (Pinocchio took ~0.2 ms per tick). Its inputs are in
+    sorted joint-name order, so the build does not depend on the order the caller delivers the joints in."""
 
-    def __init__(self, act_names: list[str], compiled: bool = False):
+    def __init__(self, act_names: list[str], compiled: bool = False, build: bool = False):
         self.model = pin.buildModelFromUrdf(CONTROLLER_URDF, pin.JointModelFreeFlyer())
         self.data = self.model.createData()
         act = [self.model.joints[self.model.getJointId(n)] for n in act_names]
@@ -50,9 +51,11 @@ class AhrsGyro:
                 j = self.model.joints[self.model.getJointId(f"{side}_{passive}")]
                 self._passive.append((j.idx_q, j.idx_v, list(act_names).index(f"{side}_{active}"), gain))
         self._imu = self.model.getFrameId("imu_link")
-        self._f = self._compile(list(act_names)) if compiled else None
+        order = sorted(act_names)
+        self._perm = np.array([list(act_names).index(n) for n in order])
+        self._f = self._compile(order, build) if compiled else None
 
-    def _compile(self, act_names: list[str]) -> ca.Function:
+    def _compile(self, act_names: list[str], build: bool) -> ca.Function:
         m, n = self.model, len(act_names)
         q_act, qd_act = ca.SX.sym("q_act", n), ca.SX.sym("qd_act", n)
         axes = {"JointModelRX": (1, 0, 0), "JointModelRY": (0, 1, 0), "JointModelRZ": (0, 0, 1)}
@@ -83,7 +86,7 @@ class AhrsGyro:
         )
         roll_d = ca.cos(pitch) * w_world[0] - ca.sin(pitch) * w_world[2]
         f = ca.Function("ahrs", [q_act, qd_act, quat, gyro], [ca.vertcat(roll, pitch, roll_d, w_world[1])])
-        return compile_functions([f], "robinion_ahrs")["ahrs"]
+        return compile_functions([f], "robonion_ahrs", build)["ahrs"]
 
     def _configuration(self, q_act: np.ndarray, base_rotation: np.ndarray = np.eye(3)) -> np.ndarray:
         q = pin.neutral(self.model)
@@ -98,7 +101,7 @@ class AhrsGyro:
     ) -> tuple[float, float, float, float]:
         """(roll, pitch, roll rate, pitch rate) of the pelvis."""
         if self._f is not None:
-            r = np.array(self._f(q_act, qd_act, imu_quat_xyzw, gyro)).ravel()
+            r = np.array(self._f(q_act[self._perm], qd_act[self._perm], imu_quat_xyzw, gyro)).ravel()
             return float(r[0]), float(r[1]), float(r[2]), float(r[3])
         pin.framesForwardKinematics(self.model, self.data, self._configuration(q_act))
         R_base_imu = self.data.oMf[self._imu].rotation
@@ -261,13 +264,20 @@ class ContactProjectionEstimator:
     and an inactive row reads lambda_i = 0, which gives the same solution as dropping it.
     """
 
-    def __init__(self, model: RigidContactModel, w_tilt: float = 0.01, iters: int = 2, compiled: bool = False):
+    def __init__(
+        self,
+        model: RigidContactModel,
+        w_tilt: float = 0.01,
+        iters: int = 2,
+        compiled: bool = False,
+        build: bool = False,
+    ):
         self.m, self.iters = model, iters
         self.w = np.r_[np.full(3, 1e-8), np.full(2, w_tilt), np.ones(len(MODEL_JOINTS))]
         self.q: np.ndarray | None = None
-        self._f = self._compile() if compiled else None
+        self._f = self._compile(build) if compiled else None
 
-    def _compile(self) -> ca.Function:
+    def _compile(self, build: bool) -> ca.Function:
         m, n = self.m, self.m.nq
         crow, Jc = m.raw_sx["crow"], m.raw_sx["Jc"]
         w = ca.DM(self.w)
@@ -284,7 +294,7 @@ class ContactProjectionEstimator:
             q = q + kkt(Jc(q, pc), w * (qm - q), -(crow(q, pc) - cref))
         qd = kkt(Jc(q, pc), w * ca.vertcat(ca.DM.zeros(3), meas_d), ca.DM.zeros(10))
         f = ca.Function("project", [base, meas, meas_d, flags, cref, pc], [q, qd])
-        return compile_functions([f], "robinion_projection")["project"]
+        return compile_functions([f], "robonion_projection", build)["project"]
 
     def reset(self):
         self.q = None

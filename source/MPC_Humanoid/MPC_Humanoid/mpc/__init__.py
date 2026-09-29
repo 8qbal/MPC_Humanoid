@@ -3,4 +3,4 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Receding-horizon controller stack for the Robinion humanoid."""
+"""Controller stack for the Robonion humanoid."""

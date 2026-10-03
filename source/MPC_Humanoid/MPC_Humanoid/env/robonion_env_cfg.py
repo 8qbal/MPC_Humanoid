@@ -20,7 +20,6 @@ from isaaclab.managers import ObservationGroupCfg as ObsGroup
 from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.scene import InteractiveSceneCfg
-# PvaCfg for AHRS, ImuCfg for the IMU
 from isaaclab.sensors import ImuCfg, PvaCfg
 from isaaclab.utils.configclass import configclass
 from isaaclab.utils.noise import GaussianNoiseCfg as Gnoise
@@ -44,15 +43,14 @@ _ACTUATED_JOINTS = [
     "head_yaw_joint",
     "head_pitch_joint",
 ]
+_IMU_PATH = "{ENV_REGEX_NS}/Robot/.*/upper_body_link/imu_link"
 
 # Scene definition.
 
 
 @configclass
 class MpcHumanoidRobonionSceneCfg(InteractiveSceneCfg):
-    """
-    Flat-ground scene holding a single Robonion robot.
-    """
+    """Flat-ground scene holding a single Robonion robot."""
 
     ground = AssetBaseCfg(
         prim_path="/World/ground",
@@ -68,8 +66,8 @@ class MpcHumanoidRobonionSceneCfg(InteractiveSceneCfg):
     robot: ArticulationCfg = Robonion_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
 
     # Xsens MTi-630 AHRS at imu_link: gyro + accel (ImuCfg) and fused orientation (PvaCfg).
-    imu = ImuCfg(prim_path="{ENV_REGEX_NS}/Robot/.*/upper_body_link/imu_link", update_period=0.0)
-    ahrs = PvaCfg(prim_path="{ENV_REGEX_NS}/Robot/.*/upper_body_link/imu_link", update_period=0.0)
+    imu = ImuCfg(prim_path=_IMU_PATH, update_period=0.0)
+    ahrs = PvaCfg(prim_path=_IMU_PATH, update_period=0.0)
 
     dome_light = AssetBaseCfg(
         prim_path="/World/DomeLight",
@@ -79,24 +77,20 @@ class MpcHumanoidRobonionSceneCfg(InteractiveSceneCfg):
 
 # MDP settings.
 
-# Action sent to the robot
+
 @configclass
 class ActionsCfg:
     joint_pos = mdp.JointPositionActionCfg(asset_name="robot", joint_names=_ACTUATED_JOINTS, scale=1.0)
 
-# Data that can be observed will be used to feed the controller
+
 @configclass
 class ObservationsCfg:
     @configclass
     class StateCfg(ObsGroup):
-        """
-        State that can be observed and measured.
-        """
+        """State that can be observed and measured."""
 
         # std at 200 Hz from the Xsens MTi-630 leaflet (Feb 2025): gyro 0.007 deg/s/sqrt(Hz),
-        # accel 60 ug/sqrt(Hz). The 0.2 deg RMS roll/pitch accuracy is a slowly varying error, so it is
-        # a bias resampled at every reset (~half-angle on the quaternion components); the small
-        # per-sample jitter on top is an assumption, the leaflet does not give it.
+        # accel 60 ug/sqrt(Hz). 
         imu_ang_vel = ObsTerm(
             func=mdp.imu_ang_vel, params={"asset_cfg": SceneEntityCfg("imu")}, noise=Gnoise(std=0.002)
         )
@@ -120,7 +114,7 @@ class ObservationsCfg:
 
     state: StateCfg = StateCfg()
 
-# Stating the event
+
 @configclass
 class EventsCfg:
     reset_scene = EventTerm(func=mdp.reset_scene_to_default, mode="reset", params={"reset_joint_targets": True})
@@ -137,7 +131,6 @@ class MpcHumanoidRobonionEnvCfg(ManagerBasedEnvCfg):
     observations: ObservationsCfg = ObservationsCfg()
     actions: ActionsCfg = ActionsCfg()
     events: EventsCfg = EventsCfg()
-
 
     # TODO: do more research on the freq (match motor freq with mpc and ahrs (do a double sampling?))
     def __post_init__(self) -> None:

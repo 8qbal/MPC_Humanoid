@@ -93,20 +93,14 @@ def nominal_pose(act_names: list[str], q_default_act: np.ndarray) -> np.ndarray:
 
 @dataclass
 class ControllerStatus:
-    modes: list[str]
-    # contact mode per foot (left, right)
-    q: np.ndarray | None
+    modes: list[str]  # contact mode per foot (left, right)
+    q: np.ndarray | None  # estimated model state; None before the gait starts
     qd: np.ndarray | None
-    # estimated model state; None before the gait starts
-    plan_time: float | None
-    # time in the gait plan (retiming and pauses move the plan, not this clock)
-    holding: bool
-    # servo targets held or moved without the NMPC (edge rules)
-    solve_time: float | None
-    # NMPC solver time of this tick [s]
+    plan_time: float | None  # time in the gait plan (retiming and pauses move the plan, not this clock)
+    holding: bool  # servo targets held or moved without the NMPC (edge rules)
+    solve_time: float | None  # NMPC solver time of this tick [s]
     qp_status: int | None
     state: State
-    # gait state of this tick
 
 
 class RobonionController:
@@ -126,11 +120,13 @@ class RobonionController:
         self.dt = dt
         self.params = params or GaitParams()
         self.ind = [self.act_names.index(n) for n in MODEL_JOINTS]
+
         self.model = RigidContactModel(self.act_names, self.q_crouch, compiled=True, build=build)
         self.ahrs = AhrsGyro(self.act_names, compiled=True, build=build)
         self.monitor = ContactModeMonitor(self.model, lead=MONITOR_LEAD, rate_ticks=MONITOR_TICKS)
         self.estimator = ContactProjectionEstimator(self.model, compiled=True, build=build)
         self.nmpc = RobonionNMPC(self.model, build=build)
+
         self.reset()
 
     def reset(self):
@@ -138,17 +134,23 @@ class RobonionController:
         self.t = 0.0
         self.q_des = self.q_default.copy()
         self.u = self.q_crouch[self.ind].copy()
+
         self.monitor.reset()
         self.estimator.reset()
+
         self.plan: GaitPlan | None = None
         self._calib: list[np.ndarray] = []
         self._bias = self._cref = None
         self._cfg = contact_config("flat", "flat")
+
         self._ctrl_modes = ["flat", "flat"]
         self._lift_xy = self._u_lift = None
         self._airborne: set[int] = set()
-        self.state, self._hold_since = State.STEP, None
-        self._calm, self._tilt_hist, self._prepared = 0.0, [], None
+        self.state = State.STEP
+        self._hold_since = None
+        self._calm = 0.0
+        self._tilt_hist = []
+        self._prepared = None
         self.status = ControllerStatus(["flat", "flat"], None, None, None, False, None, None, self.state)
 
     def step(self, q_act: np.ndarray, qd_act: np.ndarray, imu_quat_xyzw: np.ndarray, gyro: np.ndarray) -> np.ndarray:
@@ -156,39 +158,46 @@ class RobonionController:
         roll, pitch, roll_d, pitch_d = self.ahrs(q_act, qd_act, imu_quat_xyzw, gyro)
         joints, joints_d = q_act[self.ind], qd_act[self.ind]
         self.t += self.dt
+
         if self.t < GAIT_START:
             s = min(max((self.t - CROUCH_START) / CROUCH_TIME, 0.0), 1.0)
             self.q_des = self.q_default + 0.5 * (1 - math.cos(math.pi * s)) * (self.q_crouch - self.q_default)
             if self.t >= CALIBRATION_START:
                 self._calib.append(np.r_[roll, pitch, joints])
             return self.q_des
+
         if self._bias is None:
             self._start()
 
         r, p = roll - self._bias[0], pitch - self._bias[1]
         q_meas = np.r_[0.0, 0.0, 0.0, r, p, joints]
+        meas = (joints, r, p, joints_d, roll_d, pitch_d)
+
         modes, changed = self.monitor.update(q_meas, np.r_[0.0, 0.0, 0.0, roll_d, pitch_d, joints_d])
         if any(changed):
             self._cfg = contact_config(*modes)
             self._cref = self.model.update_refs(self._cref, self.estimator.q, self._cfg[1], changed)
-        q, qd = self.estimator.update(joints, r, p, joints_d, roll_d, pitch_d, self._cfg[0], self._cref, self._cfg[1])
+        q, qd = self._estimate(meas)
+
         wrench = np.array(self.model.f_wrench(q, qd, self.u, self._cfg[0], self._cref, self._cfg[1], np.zeros(3)))
         modes, changed = self.monitor.release(wrench[2], q_meas, self._cref, self._cfg[1])
         if any(changed):
             self._cfg = contact_config(*modes)
-            q, qd = self.estimator.update(
-                joints, r, p, joints_d, roll_d, pitch_d, self._cfg[0], self._cref, self._cfg[1]
-            )
+            q, qd = self._estimate(meas)
 
         tp = self.t - GAIT_START
         solve_time = qp_status = None
         u = self._gait(tp, q, qd, list(modes))
         if isinstance(u, tuple):
             u, qp_status, solve_time = u
+
         self.u = u
         self.q_des[self.ind] = self.u
         self.status = ControllerStatus(list(modes), q, qd, tp, self.state in HELD, solve_time, qp_status, self.state)
         return self.q_des
+
+    def _estimate(self, meas):
+        return self.estimator.update(*meas, self._cfg[0], self._cref, self._cfg[1])
 
     def _start(self):
         """End of calibration: AHRS bias, contact references, gait plan and NMPC initial guess."""
@@ -196,11 +205,13 @@ class RobonionController:
         q_stand, self._cref = self.model.initial_state(mean[2:])
         self._bias = mean[:2] - q_stand[3:5]
         self.monitor.calibrate(np.r_[0.0, 0.0, 0.0, mean[:2] - self._bias, mean[2:]])
+
         self._home = self._cref.copy()
         feet_xy = np.array([self._cref[0:2], self._cref[5:7]])
         self._mid = feet_xy.mean(0)
         self._lift_xy = feet_xy.copy()
         self._u_lift = [None, None]
+
         com = np.array(self.model.f_com(q_stand)).ravel()
         self._com0 = com[:2]
         self.plan = GaitPlan(self.params, feet_xy, com[2])
@@ -216,6 +227,7 @@ class RobonionController:
                 self._lift_xy[i] = np.array(self.nmpc.f_sole(q))[:2, i]
                 self._u_lift[i] = u.copy()
         self._ctrl_modes = list(modes)
+
         self._retime(t, modes)
         planned = self.plan.modes(t)
         now = tuple(
@@ -223,6 +235,7 @@ class RobonionController:
             for i, m in enumerate(modes)
         )
         self._transition(t, q, qd, now)
+
         if self.state == State.RESET:
             return u + np.clip(self.nmpc.u_nom - u, -RESET_RATE * self.dt, RESET_RATE * self.dt)
         if self.state == State.HOLD:
@@ -240,6 +253,7 @@ class RobonionController:
                 self._tilt_hist.pop(0)
         else:
             self._tilt_hist = []
+
         if edge:
             if air:
                 self.state = State.CATCH
@@ -249,12 +263,14 @@ class RobonionController:
                 self.state = State.HOLD
             self._hold(t)
             return
+
         self._hold_since = None
         if self.state in HELD:
             self.nmpc.reset(np.r_[q, qd, self.u])
             self._prepared = None
             self.state = State.STEP if air else State.RECOVER
             self._calm = 0.0
+
         if self.state == State.RECOVER:
             com, comd = np.array(self.model.f_com(q)).ravel(), np.array(self.model.f_comd(q, qd)).ravel()
             dcm = com[:2] + comd[:2] / self.plan.omega
@@ -277,9 +293,11 @@ class RobonionController:
         i = now.index("air")
         if self._u_lift[i] is None:
             return u
+
         ph_i = plan.index(t)
         if plan.phases[ph_i].swing == i and t < plan.phases[ph_i].t1:
             plan.stretch(ph_i, t - plan.phases[ph_i].t1)
+
         leg = slice(4 * i, 4 * i + 4)
         u = u.copy()
         u[leg] += np.clip(self._u_lift[i][leg] - u[leg], -U_RATE_MAX * self.dt, U_RATE_MAX * self.dt)
@@ -297,7 +315,8 @@ class RobonionController:
         return u, status, solve_time
 
     def _hold(self, t):
-        self._hold_since = t if self._hold_since is None else self._hold_since
+        if self._hold_since is None:
+            self._hold_since = t
         self._pause(t)
 
     def _pause(self, t, force=False):
@@ -305,11 +324,13 @@ class RobonionController:
         not lifted yet is postponed by lengthening the double support before it."""
         if not force and not PAUSE_AFTER <= t - self._hold_since <= MAX_PAUSE:
             return
+
         i = self.plan.index(t)
         if self.plan.phases[i].swing is not None:
             if i in self._airborne or i == 0:
                 return
             i -= 1
+
         d = t + RECOVER_TIME - self.plan.phases[i].t1
         if d > 0:
             self.plan.stretch(i, d)
@@ -320,6 +341,7 @@ class RobonionController:
         ph = self.plan.phases[i]
         if ph.swing is None:
             return
+
         if modes[ph.swing] == "air":
             self._airborne.add(i)
             if ph.t1 <= t + self.dt and ph.t1 - ph.t0 < ph.t_nom + MAX_STRETCH:
@@ -338,16 +360,19 @@ class RobonionController:
             for i in (0, 1):
                 if now[i] == "air":
                     cref[5 * i : 5 * i + 5] = self._home[5 * i : 5 * i + 5]
+
             foot, z, _ = self.plan.swing(tk)
             sole = np.zeros((3, 2))
             sole[:2] = self._lift_xy.T
             if foot is not None:
                 sole[2, foot] = z
+
             if self.state == State.RECOVER:
                 modes, dcm, comd = ("flat", "flat"), self._mid.copy(), np.zeros(2)
             else:
                 s = min(tk / COM_RAMP, 1.0)
                 modes, dcm, comd = self.plan.modes(tk), r["dcm"] + (1 - s) * (self._com0 - self._mid), r["com_vel"]
             nodes.append({"modes": modes, "cref": cref, "dcm": dcm, "comd": comd, "sole": sole})
+
         nodes[0]["modes"] = now
         return nodes

@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """
-Rigid-contact model of Robonion for the NMPC (design D in docs/stage1.md).
+Rigid-contact model of Robonion for the NMPC.
 
 q = [base x, y, z, roll, pitch, L hip_roll, L front_thigh, L ankle_pitch, L ankle_roll,
      R hip_roll, R front_thigh, R ankle_pitch, R ankle_roll, torso_pitch]   (14)
@@ -33,9 +33,10 @@ from MPC_Humanoid.robots.robonion_params import URDF_LIMITS, XH540_ARMATURE, XH5
 CONTROLLER_URDF = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "../../../../assets/robonionv2_controller.urdf")
 )
+BUILD_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../outputs/acados"))
+BUILD_HINT = "run `uv run python scripts/build_controller.py` first (no Isaac needed)"
 
-# 4 bar linkage
-PASSIVE_COUPLING = {  # passive joint suffix: (actuated joint suffix, gain)
+PASSIVE_COUPLING = {  # parallelogram (4-bar) passive joint suffix: (actuated joint suffix, gain)
     "knee_pitch_joint": ("front_thigh_pitch_joint", -1.0),
     "back_thigh_pitch_joint": ("front_thigh_pitch_joint", 1.0),
     "front_shin_pitch_joint": ("ankle_pitch_joint", -1.0),
@@ -43,6 +44,8 @@ PASSIVE_COUPLING = {  # passive joint suffix: (actuated joint suffix, gain)
 }
 
 GRAVITY = 9.81
+
+JOINT_AXES = {"JointModelRX": (1, 0, 0), "JointModelRY": (0, 1, 0), "JointModelRZ": (0, 0, 1)}
 
 MODEL_JOINTS = [
     f"{side}_{joint}"
@@ -125,15 +128,15 @@ def compile_functions(functions: list[ca.Function], prefix: str, build: bool = F
     """CasADi functions as generated C in one shared library under outputs/acados/. The file name is a hash of
     the serialized functions, so a changed model never loads a stale build. build: compile the library if it is
     missing (scripts/build_controller.py); otherwise a missing library is an error."""
-    from .nmpc import BUILD_DIR, BUILD_HINT
-
     key = hashlib.sha1("".join(f.serialize() for f in functions).encode()).hexdigest()[:12]
     name = f"{prefix}_{key}"
     so = os.path.join(BUILD_DIR, f"{name}.so")
+
     if not os.path.isfile(so):
         if not build:
             raise FileNotFoundError(f"{so} not found: {BUILD_HINT}")
         os.makedirs(BUILD_DIR, exist_ok=True)
+
         cg = ca.CodeGenerator(f"{name}.c")
         for f in functions:
             cg.add(f)
@@ -141,6 +144,7 @@ def compile_functions(functions: list[ca.Function], prefix: str, build: bool = F
         c_file = os.path.join(BUILD_DIR, f"{name}.c")
         subprocess.run(["gcc", "-O3", "-march=native", "-shared", "-fPIC", c_file, "-o", so + ".tmp"], check=True)
         os.replace(so + ".tmp", so)
+
     return {f.name(): ca.external(f.name(), so) for f in functions}
 
 
@@ -163,14 +167,17 @@ class RigidContactModel:
         for n, v in zip(act_names, q0_act):
             qn[m.joints[m.getJointId(n)].idx_q] = v
         for side in ("left", "right"):
-            for p_, (a, g) in PASSIVE_COUPLING.items():
-                qn[m.joints[m.getJointId(f"{side}_{p_}")].idx_q] = g * qn[m.joints[m.getJointId(f"{side}_{a}")].idx_q]
+            for passive, (a, g) in PASSIVE_COUPLING.items():
+                qn[m.joints[m.getJointId(f"{side}_{passive}")].idx_q] = (
+                    g * qn[m.joints[m.getJointId(f"{side}_{a}")].idx_q]
+                )
+
         nj = len(MODEL_JOINTS)
         nq = self.nq = 5 + nj
         jmap = {n: (5 + i, 1.0) for i, n in enumerate(MODEL_JOINTS)}
         for side in ("left", "right"):
-            for p_, (a, g) in PASSIVE_COUPLING.items():
-                jmap[f"{side}_{p_}"] = (jmap[f"{side}_{a}"][0], g)
+            for passive, (a, g) in PASSIVE_COUPLING.items():
+                jmap[f"{side}_{passive}"] = (jmap[f"{side}_{a}"][0], g)
 
         q = ca.SX.sym("q", nq)
         qd = ca.SX.sym("qd", nq)
@@ -187,11 +194,12 @@ class RigidContactModel:
             axis = (
                 tuple(float(a) for a in m.joints[j].extract().axis)
                 if sn == "JointModelRevoluteUnaligned"
-                else {"JointModelRX": (1, 0, 0), "JointModelRY": (0, 1, 0), "JointModelRZ": (0, 0, 1)}[sn]
+                else JOINT_AXES[sn]
             )
             qj = jmap[n][1] * q[jmap[n][0]] if n in jmap else float(qn[m.joints[j].idx_q])
             p[j] = p[par] + R[par] @ ca.DM(P.translation)
             R[j] = R[par] @ ca.DM(P.rotation) @ rot_axis(axis, qj)
+
         self.mass = sum(inertia.mass for inertia in m.inertias)
         com = sum(m.inertias[j].mass * (p[j] + R[j] @ ca.DM(m.inertias[j].lever)) for j in range(1, m.njoints))
         com = com / self.mass
@@ -214,9 +222,11 @@ class RigidContactModel:
         Gj = np.zeros((nj, nq))
         Gj[:, 5:] = np.eye(nj)
         tau = XH540_STIFFNESS * (u - Gj @ q) - XH540_DAMPING * (Gj @ qd)
+
         data = m.createData()
         Mfull = pin.crba(m, data, qn)
         Mfull = np.triu(Mfull) + np.triu(Mfull, 1).T
+
         T = np.zeros((m.nv, nq))
         T[0:3, 0:3] = np.eye(3)
         T[3, 3] = T[4, 4] = 1.0
@@ -224,6 +234,7 @@ class RigidContactModel:
             T[m.joints[m.getJointId(n)].idx_v, iq] = g
         M0 = T.T @ Mfull @ T + Gj.T @ (XH540_ARMATURE * np.eye(nj)) @ Gj
         Minv = np.linalg.inv(M0)
+
         tj = m.getJointId("torso_pitch_joint")
         c_torso = p[tj] + R[tj] @ ca.DM(m.inertias[tj].lever)
         gravity = ca.jacobian(self.mass * GRAVITY * com[2], q).T
@@ -236,8 +247,10 @@ class RigidContactModel:
         # wrench about each contact point: force = lambda[0:3]; the tilt rows give the moment
         wrench = []
         for i, (ex, ey) in enumerate(axes):
-            l_ = lam[5 * i : 5 * i + 5]
-            wrench.append(ca.vertcat(l_[:3], l_[3] * ey[1] + l_[4] * ex[1], -(l_[3] * ey[0] + l_[4] * ex[0])))
+            lam_i = lam[5 * i : 5 * i + 5]
+            wrench.append(
+                ca.vertcat(lam_i[:3], lam_i[3] * ey[1] + lam_i[4] * ex[1], -(lam_i[3] * ey[0] + lam_i[4] * ex[0]))
+            )
         W = ca.horzcat(*wrench)  # Fx Fy Fz Mx My per foot
         C = ca.horzcat(*points)
 
@@ -249,6 +262,7 @@ class RigidContactModel:
         self.points_expr, self.axes_expr = C, axes  # contact points; per foot (sole x axis, sole y axis)
         self.tilt_expr = ca.horzcat(*tilts)  # (roll, pitch) x (left, right)
         self.corners_expr = ca.horzcat(*corners)  # 3 x 8, left then right
+
         args = [q, qd, u, flags, cref, pc, f_ext]
         tilt_rate = ca.reshape(ca.jacobian(ca.vec(self.tilt_expr), q) @ qd, 2, 2)
         functions = [
@@ -263,12 +277,14 @@ class RigidContactModel:
             ca.Function("tilt_rate", [q, qd], [tilt_rate]),
             ca.Function("corners", [q], [self.corners_expr]),
         ]
+
         self.raw_sx = {f.name(): f for f in functions}
         if compiled:
             functions = [f for f in functions if f.name() != "qdd"]  # qdd is only used symbolically / offline
             functions = list(compile_functions(functions, "robonion_model", build).values()) + [self.raw_sx["qdd"]]
         for f in functions:
             setattr(self, f"f_{f.name()}", f)
+
         self.effort = np.array([_effort(n) for n in MODEL_JOINTS])
         self.q0_joints = np.array([qn[m.joints[m.getJointId(n)].idx_q] for n in MODEL_JOINTS])
 

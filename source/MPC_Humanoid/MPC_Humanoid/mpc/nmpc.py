@@ -4,8 +4,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """
-NMPC on the rigid-contact model with a gait plan (design D in docs/stage1.md, stepping in docs/stage2.md), acados
-SQP-RTI.
+NMPC on the rigid-contact model with a gait plan, acados SQP-RTI.
 
 x = [q (14), qd (14), u (9)], control v = du/dt; the output is u, the servo targets of the model joints. The caller
 passes a plan over the horizon: per node the contact modes (flat and air; edge modes are never planned), contact
@@ -35,6 +34,7 @@ import hashlib
 import math
 import os
 import subprocess
+from typing import NamedTuple
 
 import casadi as ca
 import numpy as np
@@ -42,16 +42,22 @@ from acados_template import AcadosModel, AcadosOcp, AcadosOcpSolver
 
 from MPC_Humanoid.robots.robonion_params import URDF_LIMITS, XH540_DAMPING, XH540_STIFFNESS
 
-from .model import SOLE_HALF_LENGTH, SOLE_HALF_WIDTH, RigidContactModel, contact_config, rot_axis
-
-BUILD_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../outputs/acados"))
-BUILD_HINT = "run `uv run python scripts/build_controller.py` first (no Isaac needed)"
+from .model import (
+    BUILD_DIR,
+    BUILD_HINT,
+    GRAVITY,
+    SOLE_HALF_LENGTH,
+    SOLE_HALF_WIDTH,
+    RigidContactModel,
+    contact_config,
+    rot_axis,
+)
 
 # 16 nodes of 31.25 ms over the 0.5 s horizon behave like 25 nodes of 20 ms while stepping and cost ~40 % less per
 # tick; non-uniform grids (20 ms nodes first, longer ones after) raised the torso torque above the servo limit.
 N_NODES = 16
 HORIZON = 0.5  # s
-OMEGA = math.sqrt(9.81 / 0.48)  # LIPM natural frequency at the standing CoM height
+OMEGA = math.sqrt(GRAVITY / 0.48)  # LIPM natural frequency at the standing CoM height
 F_MIN = 5.0  # N, minimum normal force of a sole in contact
 MU = 0.5  # friction coefficient for the controller; the env gives ~0.75 (ground 1.0, feet PhysX default 0.5)
 COP_MARGIN = 0.01  # m inside the sole edges
@@ -78,6 +84,13 @@ def _ocp_key(functions: list[ca.Function], arrays: list, options: dict) -> str:
         h.update(np.asarray(a, dtype=float).tobytes())
     h.update(repr(sorted(options.items())).encode())
     return h.hexdigest()[:12]
+
+
+class NodeConfig(NamedTuple):
+    flags: np.ndarray
+    pc: np.ndarray
+    isflat: np.ndarray
+    contact: np.ndarray
 
 
 class RobonionNMPC:
@@ -109,6 +122,7 @@ class RobonionNMPC:
         gamma = gk + 2 * M.alpha * (Jk @ qd) + M.alpha**2 * (ck + Jk @ (q - qk) - cref)
         lam = -Aik @ (flags * (Jk @ (M.Minv @ b) + gamma))
         qdd = M.Minv @ (b + Jk.T @ lam)
+
         x = ca.vertcat(q, qd, u)
         xdot = ca.SX.sym("xdot", x.shape[0])
         f = ca.vertcat(qd, qdd, v)
@@ -118,9 +132,12 @@ class RobonionNMPC:
 
         wrench = []
         for i, (ex, ey) in enumerate(M.axes_expr):
-            l_ = lam[5 * i : 5 * i + 5]
-            wrench.append(ca.vertcat(l_[:3], l_[3] * ey[1] + l_[4] * ex[1], -(l_[3] * ey[0] + l_[4] * ex[0])))
+            lam_i = lam[5 * i : 5 * i + 5]
+            wrench.append(
+                ca.vertcat(lam_i[:3], lam_i[3] * ey[1] + lam_i[4] * ex[1], -(lam_i[3] * ey[0] + lam_i[4] * ex[0]))
+            )
         W = ca.horzcat(*wrench)
+
         C, tilt, corners = M.points_expr, M.tilt_expr, M.corners_expr
         fz, mx, my = W[2, :].T, W[3, :].T, W[4, :].T
         hw, hl = SOLE_HALF_WIDTH - COP_MARGIN, SOLE_HALF_LENGTH - COP_MARGIN
@@ -140,7 +157,7 @@ class RobonionNMPC:
             XH540_STIFFNESS * (u - q[5:]),  # 16-24
         )
         self.nh = am.con_h_expr.shape[0]
-        self.effort = M.effort * EFFORT_FRACTION
+        effort = M.effort * EFFORT_FRACTION
 
         com, comd = M.com_expr, M.comd_expr
         dcm = com[:2] + comd[:2] / OMEGA
@@ -156,6 +173,7 @@ class RobonionNMPC:
         track = ca.vertcat(dcm - dcm_ref, comd[:2] - comd_ref)
         am.cost_y_expr = ca.vertcat(track, q[13], u, v, squeeze, ca.vec(tilt), swing, leg_err, q[3:5])
         am.cost_y_expr_e = ca.vertcat(track, ca.vec(tilt), swing, leg_err, q[3:5])
+
         self.f_sole = ca.Function("soles", [q], [ca.horzcat(*soles)])
 
         qs, qds, pcs = ca.SX.sym("qs", nq), ca.SX.sym("qds", nq), ca.SX.sym("pcs", 6)
@@ -167,7 +185,7 @@ class RobonionNMPC:
         Qs, QDs, PCs = ca.SX.sym("Q", nq, N + 1), ca.SX.sym("QD", nq, N + 1), ca.SX.sym("PC", 6, N + 1)
         f_alg = ca.Function("alg_all", [Qs, QDs, PCs], f_map(Qs, QDs, PCs))
 
-        yref = np.zeros(4 + 1 + 9 + 9 + 2 + 4 + 6 + 2 + 2)
+        yref = np.zeros(am.cost_y_expr.shape[0])
         yref[4] = self.u_nom[8]
         yref[5:14] = self.u_nom
 
@@ -191,10 +209,11 @@ class RobonionNMPC:
         ocp.cost.W_e = np.diag(
             [W_TERM] * 2 + [W_COMD] * 2 + [W_TILT] * 4 + [W_SWING] * 6 + [W_LEG] * 2 + [W_PELVIS] * 2
         )
-        ocp.cost.yref, ocp.cost.yref_e = yref, np.zeros(18)
+        ocp.cost.yref, ocp.cost.yref_e = yref, np.zeros(am.cost_y_expr_e.shape[0])
         ocp.parameter_values = np.zeros(p.shape[0])
+
         lh, uh = np.zeros(self.nh), np.full(self.nh, 1e4)
-        lh[16:], uh[16:] = -self.effort, self.effort
+        lh[16:], uh[16:] = -effort, effort
         ocp.constraints.lh, ocp.constraints.uh = lh, uh
         ocp.constraints.idxsh = np.arange(self.nh)
         # slack penalties (L1, L2) per row group: forces [N], moments [N m], servo torque [N m]
@@ -208,6 +227,7 @@ class RobonionNMPC:
         ocp.constraints.ubx = self.u_nom + np.radians(U_RANGE_DEG)
         ocp.constraints.idxbu = np.arange(9)
         ocp.constraints.lbu, ocp.constraints.ubu = np.full(9, -U_RATE_MAX), np.full(9, U_RATE_MAX)
+
         options = {
             "qp_solver": "PARTIAL_CONDENSING_HPIPM",
             # partial condensing to 5 stages, HPIPM speed mode and a warm start: QP 2.9 -> 2.1 ms per tick
@@ -234,12 +254,14 @@ class RobonionNMPC:
         numbers += [ocp.constraints.idxbx, ocp.constraints.lbx, ocp.constraints.ubx]
         numbers += [ocp.constraints.idxbu, ocp.constraints.lbu, ocp.constraints.ubu]
         name = f"robonion_nmpc_{_ocp_key([f_ocp, f_alg], numbers, options)}"
+
         am.name = ocp.name = name
         ocp.code_export_directory = os.path.join(BUILD_DIR, name)
         json_file = os.path.join(ocp.code_export_directory, f"{name}.json")
         lib_file = os.path.join(ocp.code_export_directory, f"libacados_ocp_solver_{name}.so")
         # the contact algebra in the CasADi VM took ~2 ms per tick; compiled it is a small fraction of that
         so_file = os.path.join(ocp.code_export_directory, "alg.so")
+
         if build:
             self.solver = AcadosOcpSolver(ocp, json_file=json_file, verbose=False)
             cg = ca.CodeGenerator("alg.c")
@@ -254,6 +276,7 @@ class RobonionNMPC:
             self.solver = AcadosOcpSolver(
                 ocp, json_file=json_file, generate=False, build=False, check_reuse_possible=False, verbose=False
             )
+
         self.f_alg = ca.external("alg_all", so_file)
         self.nx = 2 * nq + 9
         self._diag = np.arange(10)
@@ -268,14 +291,14 @@ class RobonionNMPC:
             self.solver.set(k, "x", x0)
         self.X = None
 
-    def _config(self, modes):
+    def _config(self, modes) -> NodeConfig:
         if modes not in self._cfg_cache:
             flags, pc = contact_config(*modes)
-            self._cfg_cache[modes] = (
+            self._cfg_cache[modes] = NodeConfig(
                 flags,
                 pc,
-                np.array([float(m == "flat") for m in modes]),
-                np.array([float(m != "air") for m in modes]),
+                isflat=np.array([float(m == "flat") for m in modes]),
+                contact=np.array([float(m != "air") for m in modes]),
             )
         return self._cfg_cache[modes]
 
@@ -286,25 +309,27 @@ class RobonionNMPC:
         else:
             Q, QD = self.X[:, :nq].copy(), self.X[:, nq : 2 * nq].copy()
             Q[0], QD[0] = q, qd
+
         cfgs = [self._config(tuple(node["modes"])) for node in plan]
-        flags = np.array([cf[0] for cf in cfgs])
-        pcs = np.array([cf[1] for cf in cfgs])
+        flags = np.array([cf.flags for cf in cfgs])
+        pcs = np.array([cf.pc for cf in cfgs])
         J, c, g = (np.array(a) for a in self.f_alg(Q.T, QD.T, pcs.T))
         Jb = J.reshape(10, n, nq).transpose(1, 0, 2)
         A = flags[:, :, None] * (Jb @ self.m.Minv @ Jb.transpose(0, 2, 1))
         A[:, self._diag, self._diag] += 1.0 - flags
+
         P = np.concatenate(
             [
                 flags,
                 np.array([node["cref"] for node in plan]),
                 pcs,
-                np.array([cf[2] for cf in cfgs]),
+                np.array([cf.isflat for cf in cfgs]),
                 Jb.transpose(0, 2, 1).reshape(n, -1),
                 np.linalg.inv(A).transpose(0, 2, 1).reshape(n, -1),
                 g.T,
                 c.T,
                 Q,
-                np.array([cf[3] for cf in cfgs]),
+                np.array([cf.contact for cf in cfgs]),
                 np.array([node["dcm"] for node in plan]),
                 np.array([node["comd"] for node in plan]),
                 np.array([np.asarray(node["sole"]).T.ravel() for node in plan]),
@@ -322,6 +347,7 @@ class RobonionNMPC:
         self.X = self.solver.get_flat("x").reshape(self.N + 1, self.nx)
         v = self.solver.get(0, "u")
         time_tot = float(self.solver.get_stats("time_tot"))
+
         if not (np.all(np.isfinite(self.X)) and np.all(np.isfinite(v))):
             # a NaN iterate stays NaN in every later RTI step: restart from the measured state, hold the targets
             self.nan_resets += 1

@@ -96,8 +96,9 @@ scripts/                            run_env.py (load + play the env), build_cont
 tools/asset/                        URDF -> USD pipeline scripts (fix, flatten, check), controller URDF export
 outputs/                            scratch (git-ignored): acados build, stage-1/2 prototypes, validation scripts/data
 docs/PLAN.md                        human-facing roadmap for the MPC controller (not a task list)
-docs/stage1.md                      stage-1 record: designs A-D, equations, validation, push tables
+docs/stage1.md                      stage-1 record: the four designs tried, equations, validation, push tables
 docs/stage2.md                      stage-2 record: gait design, gait rules, tick time, push tables
+                                    (both stage records are local only, git-ignored; last committed at git tag stage2)
 ```
 
 `references/robinion_description` and the other `references/*` folders are **git
@@ -136,8 +137,9 @@ inertial/collision data — `robonionv2.py` deliberately keeps them separate.
 
 ## Controller (`mpc/`)
 
-Stage 1 (standing) is done with design D; `docs/stage1.md` records every design tried
-(A-D) with numbers. Stage 2 (stepping in place) is done on the same NMPC; `docs/stage2.md`
+Stage 1 (standing) is done with the rigid-contact NMPC; `docs/stage1.md` records every
+design tried (LIPM/DCM MPC + IK, flat-foot NMPC, soft-contact NMPC, rigid-contact NMPC) with
+numbers. Stage 2 (stepping in place) is done on the same NMPC; `docs/stage2.md`
 records the gait design, the gait rules and why, and every result. Read both before changing
 the controller. The stage-1 standing controller (its 25-node NMPC and push script) is
 retired: straight-leg standing only needs the servos to hold the pose,

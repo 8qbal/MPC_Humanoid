@@ -1,6 +1,6 @@
-"""Load MpcHumanoidRobonionEnvCfg and play the simulation with zero commanded effort.
+"""Load MpcHumanoidRobonionEnvCfg and play the simulation with a zero action (no offset from the default pose).
 
-The actuator PD holds the crouch pose, so the robot just stands there. Close the window
+The actuator PD holds the default pose, so the robot just stands there. Close the window
 (or Ctrl-C) to stop.
 
 Usage:

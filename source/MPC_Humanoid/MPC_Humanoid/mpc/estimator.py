@@ -22,6 +22,7 @@ import pinocchio as pin
 
 from .model import (
     CONTROLLER_URDF,
+    JOINT_AXES,
     MODEL_JOINTS,
     PASSIVE_COUPLING,
     RigidContactModel,
@@ -40,8 +41,10 @@ class AhrsGyro:
     sorted joint-name order, so the build does not depend on the order the caller delivers the joints in."""
 
     def __init__(self, act_names: list[str], compiled: bool = False, build: bool = False):
+        act_names = list(act_names)
         self.model = pin.buildModelFromUrdf(CONTROLLER_URDF, pin.JointModelFreeFlyer())
         self.data = self.model.createData()
+
         act = [self.model.joints[self.model.getJointId(n)] for n in act_names]
         self._act_idx_q = np.array([j.idx_q for j in act])
         self._act_idx_v = np.array([j.idx_v for j in act])
@@ -49,16 +52,16 @@ class AhrsGyro:
         for side in ("left", "right"):
             for passive, (active, gain) in PASSIVE_COUPLING.items():
                 j = self.model.joints[self.model.getJointId(f"{side}_{passive}")]
-                self._passive.append((j.idx_q, j.idx_v, list(act_names).index(f"{side}_{active}"), gain))
+                self._passive.append((j.idx_q, j.idx_v, act_names.index(f"{side}_{active}"), gain))
+
         self._imu = self.model.getFrameId("imu_link")
         order = sorted(act_names)
-        self._perm = np.array([list(act_names).index(n) for n in order])
+        self._perm = np.array([act_names.index(n) for n in order])
         self._f = self._compile(order, build) if compiled else None
 
     def _compile(self, act_names: list[str], build: bool) -> ca.Function:
         m, n = self.model, len(act_names)
         q_act, qd_act = ca.SX.sym("q_act", n), ca.SX.sym("qd_act", n)
-        axes = {"JointModelRX": (1, 0, 0), "JointModelRY": (0, 1, 0), "JointModelRZ": (0, 0, 1)}
         frame = m.frames[self._imu]
         R, j = ca.DM(frame.placement.rotation), frame.parentJoint
         while j > 1:  # the IMU in the base frame; joint 1 is the free flyer
@@ -69,8 +72,9 @@ class AhrsGyro:
                 side, rest = name.split("_", 1)
                 active, gain = PASSIVE_COUPLING[rest]
                 qj = gain * q_act[act_names.index(f"{side}_{active}")]
-            R = ca.DM(m.jointPlacements[j].rotation) @ rot_axis(axes[m.joints[j].shortname()], qj) @ R
+            R = ca.DM(m.jointPlacements[j].rotation) @ rot_axis(JOINT_AXES[m.joints[j].shortname()], qj) @ R
             j = m.parents[j]
+
         quat, gyro = ca.SX.sym("quat", 4), ca.SX.sym("gyro", 3)
         x, y, z, w = ca.vertsplit(quat / ca.norm_2(quat))
         Rq = ca.vertcat(
@@ -80,11 +84,13 @@ class AhrsGyro:
         )
         Rb = Rq @ R.T
         roll, pitch = ca.atan2(Rb[2, 1], Rb[2, 2]), -ca.asin(Rb[2, 0])
+
         S = R.T @ ca.reshape(ca.jacobian(ca.vec(R), q_act) @ qd_act, 3, 3)  # IMU rate relative to the base
         w_world = (
             rot_axis((0, 1, 0), pitch) @ rot_axis((1, 0, 0), roll) @ R @ (gyro - ca.vertcat(S[2, 1], S[0, 2], S[1, 0]))
         )
         roll_d = ca.cos(pitch) * w_world[0] - ca.sin(pitch) * w_world[2]
+
         f = ca.Function("ahrs", [q_act, qd_act, quat, gyro], [ca.vertcat(roll, pitch, roll_d, w_world[1])])
         return compile_functions([f], "robonion_ahrs", build)["ahrs"]
 
@@ -103,6 +109,7 @@ class AhrsGyro:
         if self._f is not None:
             r = np.array(self._f(q_act[self._perm], qd_act[self._perm], imu_quat_xyzw, gyro)).ravel()
             return float(r[0]), float(r[1]), float(r[2]), float(r[3])
+
         pin.framesForwardKinematics(self.model, self.data, self._configuration(q_act))
         R_base_imu = self.data.oMf[self._imu].rotation
         x, y, z, w = (float(v) for v in imu_quat_xyzw / np.linalg.norm(imu_quat_xyzw))
@@ -169,9 +176,10 @@ class ContactModeMonitor:
         rate_ticks: int = 1,
     ):
         self.m = model
-        self.tilt_on, self.rate_on, self.h_air, self.h_land = tilt_on, rate_on, h_air, h_land
-        self.lead, self.rate_ticks = lead, rate_ticks
+        self.tilt_on, self.rate_on, self.lead, self.rate_ticks = tilt_on, rate_on, lead, rate_ticks
+        self.h_air, self.h_land = h_air, h_land
         self.f_off, self.f_on, self.d_off = f_off, f_on, d_off
+
         self.reset()
 
     def reset(self):
@@ -191,9 +199,10 @@ class ContactModeMonitor:
         rate = np.array(self.m.f_tilt_rate(q_meas, qd_meas))
         P = np.array(self.m.f_corners(q_meas))
         low = np.array([P[2, :4].min(), P[2, 4:].min()])
+
         new = list(self.modes)
         for i in (0, 1):
-            (roll, pitch), (rr, pr), mode = tilt[:, i], rate[:, i], self.modes[i]
+            (roll, pitch), (roll_rate, pitch_rate), mode = tilt[:, i], rate[:, i], self.modes[i]
             if low[i] - low[1 - i] > self.h_air:
                 new[i] = "air"
             elif mode == "air":
@@ -201,27 +210,32 @@ class ContactModeMonitor:
                     new[i] = landing_mode(roll, pitch, self.tilt_on)
             elif mode == "flat":
                 if self.lead is None:
-                    ri, pi, on = rr, pr, self.rate_on
+                    roll_test, pitch_test, on = roll_rate, pitch_rate, self.rate_on
                 else:
-                    ri, pi, on = roll + self.lead * rr, pitch + self.lead * pr, self.tilt_on
-                edge = _edge(ri, pi, on)
+                    roll_test = roll + self.lead * roll_rate
+                    pitch_test = pitch + self.lead * pitch_rate
+                    on = self.tilt_on
+
+                edge = _edge(roll_test, pitch_test, on)
                 last, n = self._rate_edge[i]
                 n = n + 1 if edge is not None and edge == last else int(edge is not None)
                 self._rate_edge[i] = (edge, n)
                 if n < self.rate_ticks:
-                    ri = pi = 0.0
-                if roll < -self.tilt_on or ri < -on:
+                    roll_test = pitch_test = 0.0
+
+                if roll < -self.tilt_on or roll_test < -on:
                     new[i] = "left_edge"
-                elif roll > self.tilt_on or ri > on:
+                elif roll > self.tilt_on or roll_test > on:
                     new[i] = "right_edge"
-                elif pitch > self.tilt_on or pi > on:
+                elif pitch > self.tilt_on or pitch_test > on:
                     new[i] = "toe"
-                elif pitch < -self.tilt_on or pi < -on:
+                elif pitch < -self.tilt_on or pitch_test < -on:
                     new[i] = "heel"
             elif leaves_edge(mode, roll, pitch):
                 new[i] = "flat"
             if new[i] != "flat":
                 self._rate_edge[i] = (None, 0)
+
         changed = [a != b for a, b in zip(new, self.modes)]
         self.landed = [a == "air" and b != "air" for a, b in zip(self.modes, new)]
         self.modes = new
@@ -240,13 +254,16 @@ class ContactModeMonitor:
         off = [i for i in contact if fz[i] < (self.f_on if self.landed[i] else self.f_off)]
         if len(contact) == 2 and not off:
             c = np.array(self.m.f_crow(q_meas, pc)).ravel()
-            drift = (c[5:7] - c[0:2]) - (np.asarray(cref)[5:7] - np.asarray(cref)[0:2])
+            cref = np.asarray(cref)
+            drift = (c[5:7] - c[0:2]) - (cref[5:7] - cref[0:2])
             if np.linalg.norm(drift) > self.d_off:
                 off = [int(np.argmin(fz))]
+
         if len(off) == len(contact):
             off = []
         for i in off:
             new[i] = "air"
+
         changed = [a != b for a, b in zip(new, self.modes)]
         self.modes = new
         return new, changed
@@ -293,6 +310,7 @@ class ContactProjectionEstimator:
         for _ in range(self.iters):
             q = q + kkt(Jc(q, pc), w * (qm - q), -(crow(q, pc) - cref))
         qd = kkt(Jc(q, pc), w * ca.vertcat(ca.DM.zeros(3), meas_d), ca.DM.zeros(10))
+
         f = ca.Function("project", [base, meas, meas_d, flags, cref, pc], [q, qd])
         return compile_functions([f], "robonion_projection", build)["project"]
 
@@ -324,16 +342,19 @@ class ContactProjectionEstimator:
         if self.q is None:
             self.q = qm.copy()
             self.q[2] = -np.array(self.m.f_crow(qm, pc)).ravel()[[2, 7]].mean()
+
         if self._f is not None:
             q, qd = self._f(self.q[:3], qm[3:], np.r_[roll_d, pitch_d, joints_d], flags, cref, pc)
             self.q = np.array(q).ravel()
             return self.q, np.array(qd).ravel()
+
         q = np.r_[self.q[:3], qm[3:]]
         qm[:3] = self.q[:3]
         for _ in range(self.iters):
             c = np.array(self.m.f_crow(q, pc)).ravel()[a] - np.asarray(cref)[a]
             J = np.array(self.m.f_Jc(q, pc))[a]
             q = q + self._kkt(J, self.w * (qm - q), -c)
+
         J = np.array(self.m.f_Jc(q, pc))[a]
         qd = self._kkt(J, self.w * np.r_[0.0, 0.0, 0.0, roll_d, pitch_d, joints_d], np.zeros(a.sum()))
         self.q = q

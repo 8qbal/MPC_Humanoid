@@ -8,6 +8,8 @@
 logs/
 outputs/
 artifacts/
+docs/stage1.md
+docs/stage2.md
 videos/
 wandb/
 
@@ -15,4 +17,3 @@ wandb/
 .vscode/settings.json
 .vscode/launch.json
 .vscode
-

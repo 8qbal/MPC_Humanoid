@@ -1,6 +1,6 @@
 # Ref for mpc model builder and the isaac sim
 
-# Motor parameters follow references/robonion_description/robonion2.urdf, which is a dict of
+# Motor limits taken verbatim from references/robinion_description/robinion2.urdf
 URDF_LIMITS = {  # key <-> value: (effort [N·m], velocity [rad/s])
     "yaw": (4.1, 4.82),  # hip yaw, elbow yaw, head yaw
     "torso_arms": (10.6, 3.14),  # torso pitch, shoulder pitch/roll, elbow pitch
@@ -17,9 +17,9 @@ XH430_DAMPING = 1.1  # N·m·s/rad, 3.1 N·m / 2.83 rad/s
 XH540_ARMATURE = 0.003
 XH430_ARMATURE = 0.002
 
-# 0 rad for standing more than 0 will crouch
+# 0 = straight legs; > 0 crouches
 LEG_CROUCH = 0.0  # rad
-# set 0 for tpose, -1.4 for arm down initialize
+# 0 = T-pose; more negative = arms lower
 SHOULDER_ROLL_DOWN = -1.0  # rad
 
 DEFAULT_JOINT_POS = {  # joint-name regex -> angle [rad]

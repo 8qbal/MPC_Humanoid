@@ -71,6 +71,7 @@ class GaitPlan:
             prev, swing = stance, 1 - swing
         add(params.t_ds, prev, mid)
         add(params.t_stand, mid, mid)
+
         self.phases = phases
         self._integrate()
 
@@ -97,6 +98,7 @@ class GaitPlan:
             pd = (ph.zmp1 - ph.zmp0) / T
             self._B[i] = xi - ph.zmp1 - pd / w
             xi = ph.zmp0 + pd / w + self._B[i] * math.exp(-w * T)
+
         # c = p + B / 2 exp(w (t - t1)) + D exp(-w (t - t0)), D from continuity of c
         self._D, c = [None] * n, self.phases[0].zmp0.copy()
         for i, ph in enumerate(self.phases):
@@ -125,6 +127,7 @@ class GaitPlan:
         eB = self._B[i] * math.exp(w * (tau - T))
         eD = self._D[i] * math.exp(-w * tau)
         c = p + 0.5 * eB + eD
+
         return {
             "zmp": p,
             "dcm": p + pd / w + eB,

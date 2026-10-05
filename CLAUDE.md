@@ -146,19 +146,24 @@ retired: straight-leg standing only needs the servos to hold the pose,
 and every active mode (balancing, stepping) runs at the crouched pose. Its code is at git tag
 `stage2`; its results stay in `docs/stage1.md` as a record.
 
-**Project state (stage 2 closed by the user on 2026-09-26).** Next, in this order: (1) the
-Jetson AGX Orin tick benchmark, run by the user (`docs/stage2.md`, *Benchmark on the Jetson
-AGX Orin*); its result decides whether the tick architecture must change (node count, horizon,
-NMPC in its own thread); (2) a hardware check of the contact-mode monitor and the estimator
-(standing, slow stepping), whose thresholds (0.2 deg, 15 ms lead, 2 ticks) were tuned in
-Isaac only; (3) stage 3, footstep adaptation. Known issues, all listed under *Open* in
-`docs/stage2.md`:
-- Tick 4.2-4.3 ms mean / 4.6-4.8 ms p95 on the desktop, 2 % of ticks over 5 ms; Jetson unknown.
+**Project state (stage 2 closed by the user on 2026-09-26; stage 3 set on 2026-10-04).** Stage 3
+is base position estimation. The supervisor rejected the stage-2 base x, y, z:
+`ContactProjectionEstimator` pins the contact points (`cref`) in the world, so any foot slip
+becomes a permanent position error, and slip cannot be measured. Proposed replacement: the
+leg-kinematics + IMU EKF of Bloesch et al. 2012 (RSS). The proposal and its offline validation
+(record a stepping run, replay the filter in `outputs/stage3_prototypes/`, drift of x, y, z
+against the simulator truth in the world frame) are in `docs/PLAN.md`, *Stage 3*. Not started;
+the controller keeps the stage-2 estimator until the results are in. The user dropped the
+Jetson AGX Orin tick benchmark (the Jetson is assumed to keep up). After stage 3: a hardware
+check of the contact-mode monitor and the estimator (standing, slow stepping), whose
+thresholds (0.2 deg, 15 ms lead, 2 ticks) were tuned in Isaac only; then stage 4, footstep
+adaptation. Known issues, all listed under *Open* in `docs/stage2.md`:
+- Tick 4.2-4.3 ms mean / 4.6-4.8 ms p95 on the desktop, 2 % of ticks over 5 ms; Jetson not benchmarked.
 - Backward pushes while stepping: −x 1.75 N·s survived in 2 of 3 seeds, −x 2.0 falls. Both
   passed with 4 PhysX velocity iterations; the drop comes from the simulator fix (0
   iterations), not the controller, and was accepted by the user.
 - After a push the gait holds the targets and waits (up to 3.6 s), no active recovery;
-  lateral pushes beyond ±0.5 / +1.0 N·s need step placement (stage 3).
+  lateral pushes beyond ±0.5 / +1.0 N·s need step placement (stage 4).
 - Landing drift ~0.3 mm per step (needs pelvis yaw in the model); ground-height error
   beyond ±5 mm falls.
 - All results come from Isaac only; limits within one push step are not precise.
@@ -222,10 +227,10 @@ Isaac only; (3) stage 3, footstep adaptation. Known issues, all listed under *Op
   tag `stage2` (check that tag out first).
 - Open: a stepping tick costs 4.2-4.3 ms mean / 4.6-4.8 ms p95 in Isaac on the desktop (compiled
   estimation + NMPC), near the 5 ms budget; the real robot runs on a Jetson AGX Orin (not
-  measured: `scripts/run_stepping.py --record run.npz` on the desktop, then
+  measured, benchmark dropped by the user; if needed: `scripts/run_stepping.py --record run.npz` on the desktop, then
   `scripts/build_controller.py` and `scripts/benchmark_stepping.py run.npz` on the Jetson, no
   Isaac needed). Lateral push
-  recovery while stepping needs footstep adaptation (stage 3). Landing drift ~0.3 mm per step
+  recovery while stepping needs footstep adaptation (stage 4). Landing drift ~0.3 mm per step
   needs pelvis yaw in the model (walking / turning stage).
 
 ## The URDF → USD pipeline (assets/robonionv2.usd)

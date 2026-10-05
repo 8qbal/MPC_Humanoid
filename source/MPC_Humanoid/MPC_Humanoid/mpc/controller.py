@@ -9,10 +9,11 @@ Robonion controller: balance and stepping in place at the crouched pose (docs/st
 Timeline: standing at the default pose, crouch ramp (straight legs are singular and too slow for the swing),
 AHRS bias calibration with both soles flat, then the gait plan (gait.py) runs through RobonionNMPC every tick.
 
-Every tick: AHRS/gyro -> contact modes (ContactModeMonitor) -> state (ContactProjectionEstimator) -> gait logic
--> RobonionNMPC -> servo targets of the 9 model joints; the other actuated joints hold their defaults. Node 0 of the
-contact plan is the measured mode, later nodes follow the gait plan. The gait logic is a state machine (State),
-each rule justified by an Isaac failure in docs/stage2.md; within STEP:
+Every tick: AHRS/gyro -> contact modes (ContactModeMonitor) -> base position and velocity (LegKinematicsEkf) ->
+joints and tilt on the contact manifold (ContactProjectionEstimator) -> gait logic -> RobonionNMPC -> servo targets
+of the 9 model joints; the other actuated joints hold their defaults. Node 0 of the contact plan is the measured
+mode, later nodes follow the gait plan. The gait logic is a state machine (State), each rule justified by an Isaac
+failure in docs/stage2.md; within STEP:
 
 - a foot scheduled to swing that tips onto an edge while the other sole is flat is peeling off: it is planned
   in the air and the NMPC keeps running;
@@ -28,6 +29,7 @@ from enum import Enum
 
 import numpy as np
 
+from .ekf import LegKinematicsEkf
 from .estimator import AhrsGyro, ContactModeMonitor, ContactProjectionEstimator
 from .gait import GaitParams, GaitPlan
 from .model import EDGE_MODES, MODEL_JOINTS, RigidContactModel, contact_config
@@ -126,6 +128,7 @@ class RobonionController:
         self.monitor = ContactModeMonitor(self.model, lead=MONITOR_LEAD, rate_ticks=MONITOR_TICKS)
         self.estimator = ContactProjectionEstimator(self.model, compiled=True, build=build)
         self.nmpc = RobonionNMPC(self.model, build=build)
+        self.ekf = LegKinematicsEkf(self.act_names)
 
         self.reset()
 
@@ -137,6 +140,9 @@ class RobonionController:
 
         self.monitor.reset()
         self.estimator.reset()
+        self.ekf.reset()
+        self._ekf_frame = None  # (rotation, offset) from the EKF world to the model world
+        self._ekf_base = None
 
         self.plan: GaitPlan | None = None
         self._calib: list[np.ndarray] = []
@@ -153,11 +159,21 @@ class RobonionController:
         self._prepared = None
         self.status = ControllerStatus(["flat", "flat"], None, None, None, False, None, None, self.state)
 
-    def step(self, q_act: np.ndarray, qd_act: np.ndarray, imu_quat_xyzw: np.ndarray, gyro: np.ndarray) -> np.ndarray:
-        """One control tick. Returns joint position targets for the actuated joints."""
+    def step(
+        self,
+        q_act: np.ndarray,
+        qd_act: np.ndarray,
+        imu_quat_xyzw: np.ndarray,
+        gyro: np.ndarray,
+        accel: np.ndarray,
+    ) -> np.ndarray:
+        """One control tick. gyro and accel (with gravity, as the accelerometer reads it) in the IMU frame. Returns
+        joint position targets for the actuated joints."""
         roll, pitch, roll_d, pitch_d = self.ahrs(q_act, qd_act, imu_quat_xyzw, gyro)
         joints, joints_d = q_act[self.ind], qd_act[self.ind]
         self.t += self.dt
+        ekf_modes = list(self.status.modes) if self.t >= GAIT_START else ["flat", "flat"]
+        self._ekf_base = self.ekf.update(q_act, qd_act, accel, gyro, imu_quat_xyzw, ekf_modes, self.dt)
 
         if self.t < GAIT_START:
             s = min(max((self.t - CROUCH_START) / CROUCH_TIME, 0.0), 1.0)
@@ -197,7 +213,25 @@ class RobonionController:
         return self.q_des
 
     def _estimate(self, meas):
-        return self.estimator.update(*meas, self._cfg[0], self._cref, self._cfg[1])
+        # contact points of the feet in contact where the EKF has them (they may slip), so the joints and tilt
+        # projected onto the contact manifold agree with the EKF base
+        Rz, offset = self._ekf_frame
+        for i in (0, 1):
+            if self.ekf.modes[i] != "air":
+                self._cref[5 * i : 5 * i + 3] = Rz @ self.ekf.p[i] + offset
+        q, qd = self.estimator.update(*meas, self._cfg[0], self._cref, self._cfg[1])
+        pos, vel, _ = self._ekf_base
+        q, qd = q.copy(), qd.copy()
+        q[:3], qd[:3] = Rz @ pos + offset, Rz @ vel
+        return q, qd
+
+    def _align_ekf(self, q_stand: np.ndarray):
+        """EKF world -> model world: the model has no yaw, and its origin is set by the standing pose."""
+        pos, _, R_base = self._ekf_base
+        yaw = math.atan2(R_base[1, 0], R_base[0, 0])
+        c, s = math.cos(yaw), math.sin(yaw)
+        Rz = np.array([[c, s, 0.0], [-s, c, 0.0], [0.0, 0.0, 1.0]])
+        self._ekf_frame = (Rz, q_stand[:3] - Rz @ pos)
 
     def _start(self):
         """End of calibration: AHRS bias, contact references, gait plan and NMPC initial guess."""
@@ -205,6 +239,7 @@ class RobonionController:
         q_stand, self._cref = self.model.initial_state(mean[2:])
         self._bias = mean[:2] - q_stand[3:5]
         self.monitor.calibrate(np.r_[0.0, 0.0, 0.0, mean[:2] - self._bias, mean[2:]])
+        self._align_ekf(q_stand)
 
         self._home = self._cref.copy()
         feet_xy = np.array([self._cref[0:2], self._cref[5:7]])

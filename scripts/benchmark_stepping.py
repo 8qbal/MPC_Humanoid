@@ -1,9 +1,10 @@
 """Time the stage-2 stepping controller without Isaac, by replaying a recorded run (for the Jetson AGX Orin).
 
 Record the inputs once with Isaac (`scripts/run_stepping.py --record run.npz`), copy the file to the target machine
-and replay it there: every tick gets the recorded encoder, AHRS and gyro values (as float32, as Isaac and the
-drivers deliver them), so the controller takes the same path as in the recorded run. The replay is open loop; on
-another CPU the targets can differ by rounding, which is reported (the recorded targets are the reference).
+and replay it there: every tick gets the recorded encoder, AHRS, gyro and accelerometer values (as float32, as Isaac
+and the drivers deliver them), so the controller takes the same path as in the recorded run. The replay is open loop;
+on another CPU the targets can differ by rounding, which is reported (the recorded targets are the reference).
+Recordings made before the EKF (stage 3) have no accelerometer and must be recorded again.
 
 Needs no Isaac Sim / Isaac Lab: numpy, casadi, pinocchio, acados_template and the acados libraries
 (ACADOS_SOURCE_DIR, LD_LIBRARY_PATH). It does not build the controller: run scripts/build_controller.py on the
@@ -32,7 +33,7 @@ def main() -> None:
     d = np.load(args.record)
     t_ss, t_ds, clearance, n_steps = d["params"]
     params = GaitParams(t_ss=float(t_ss), t_ds=float(t_ds), clearance=float(clearance), n_steps=int(n_steps))
-    inputs = [d[k].astype(np.float32) for k in ("q_act", "qd_act", "quat", "gyro")]
+    inputs = [d[k].astype(np.float32) for k in ("q_act", "qd_act", "quat", "gyro", "accel")]
     controller = RobonionController(
         list(d["act_names"]), d["q_default_act"].astype(np.float32), float(d["step_dt"]), params
     )

@@ -1,8 +1,8 @@
 """Run the stage-2 stepping-in-place controller in the Robonion env, optionally with one push while stepping.
 
-The controller only sees what the real robot measures (joint encoders, AHRS orientation, gyro): it crouches,
-calibrates the AHRS bias, then steps in place (docs/stage2.md). The push (constant force on upper_body_link) comes
-in the middle of the 5th single support (--push_at mid_ss) or of the double support after it (ds). Simulator
+The controller only sees what the real robot measures (joint encoders, AHRS orientation, gyro, accelerometer): it
+crouches, calibrates the AHRS bias, then steps in place (docs/stage2.md). The push (constant force on upper_body_link)
+comes in the middle of the 5th single support (--push_at mid_ss) or of the double support after it (ds). Simulator
 ground truth (sole heights, foot displacement, root height) is read for scoring only. Use one env per process:
 multi-env runs of this asset differ from single-env runs (see docs/stage1.md).
 
@@ -100,7 +100,7 @@ def main() -> None:
     fell = False
     ticks, solve_times = [], []
     qp_failures = held = 0
-    record = {k: [] for k in ("q_act", "qd_act", "quat", "gyro", "q_des")}
+    record = {k: [] for k in ("q_act", "qd_act", "quat", "gyro", "accel", "q_des")}
     step = 0
 
     while True:
@@ -128,6 +128,7 @@ def main() -> None:
             state[obs_slice["joint_vel_rel"]][act_ids],
             state[obs_slice["imu_orientation"]],
             state[obs_slice["imu_ang_vel"]],
+            state[obs_slice["imu_lin_acc"]],
         )
 
         t0 = time.perf_counter()

@@ -44,9 +44,10 @@ Stages, each built on the previous one:
 
 1. **Stabilizer** -- double-support standing that recovers from pushes without stepping (ZMP moved inside the hull of both soles).
 2. **Stepping in place** -- gait scheduler, single support, alternating support polygon, swing-foot spline.
-3. **Fast walking without arm swing** -- footstep position and step timing as MPC decision variables, 0.3--0.4 m/s.
-4. **Fast walking** -- add counter-phase arm swing and other naturalness tuning.
-5. *Maybe:* **stochastic MPC** -- chance-constrained or tube MPC on top of the same QP for noise and disturbance robustness.
+3. **Base position estimation** -- base x, y, z from an EKF fusing IMU and leg kinematics (Bloesch et al. 2012) instead of pinning the feet in contact.
+4. **Fast walking without arm swing** -- footstep position and step timing as MPC decision variables, 0.3--0.4 m/s.
+5. **Fast walking** -- add counter-phase arm swing and other naturalness tuning.
+6. *Maybe:* **stochastic MPC** -- chance-constrained or tube MPC on top of the same QP for noise and disturbance robustness.
 
 Success metrics: maximum recoverable push impulse (N·s) per direction, velocity RMSE, falls per 100 pushes, no servo hitting its velocity limit.
 
@@ -63,13 +64,42 @@ Never worse than the passive robot, better in two to three cases; larger pushes 
 
 ### Stage 2 status: done (stepping in place)
 
-Full record: [`docs/stage2.md`](stage2.md).  One layer: the rigid-contact NMPC with a contact plan from a gait scheduler (T_ss 0.3 s, T_ds 0.1 s, 2 cm clearance, 0.2 rad crouch), a closed-form DCM reference and a swing spline as cost references (`mpc/gait.py`, `mpc/nmpc.py` `RobonionNMPC`, `mpc/controller.py` `RobonionController`, built by `scripts/build_controller.py`, run by `scripts/run_stepping.py`).  In Isaac, with the estimator only: 20 steps at 2 and 3 cm without a fall; early and late touchdowns retime the plan (±5 mm of ground-height error handled); one tick ≈ 4.3 ms on the desktop (compiled contact algebra and estimation, split RTI, 16 nodes), measurement-to-target latency ≈ 1.3 ms.  Pushes in the middle of single support (3 noise seeds): stepping resumes after +1.75 / −1.0 N·s sagittal (−1.75 in 2 of 3) and ±0.5 / +1.0 N·s lateral; lateral push recovery needs footstep adaptation (stage 3).  Open: Jetson timing, hardware check of the contact-mode monitor, ≈ 0.3 mm forward landing drift per step.
+Full record: [`docs/stage2.md`](stage2.md).  One layer: the rigid-contact NMPC with a contact plan from a gait scheduler (T_ss 0.3 s, T_ds 0.1 s, 2 cm clearance, 0.2 rad crouch), a closed-form DCM reference and a swing spline as cost references (`mpc/gait.py`, `mpc/nmpc.py` `RobonionNMPC`, `mpc/controller.py` `RobonionController`, built by `scripts/build_controller.py`, run by `scripts/run_stepping.py`).  In Isaac, with the estimator only: 20 steps at 2 and 3 cm without a fall; early and late touchdowns retime the plan (±5 mm of ground-height error handled); one tick ≈ 4.3 ms on the desktop (compiled contact algebra and estimation, split RTI, 16 nodes), measurement-to-target latency ≈ 1.3 ms.  Pushes in the middle of single support (3 noise seeds): stepping resumes after +1.75 / −1.0 N·s sagittal (−1.75 in 2 of 3) and ±0.5 / +1.0 N·s lateral; lateral push recovery needs footstep adaptation (stage 4).  Open: Jetson timing, hardware check of the contact-mode monitor, ≈ 0.3 mm forward landing drift per step.
 
-### Stage 3 candidates from ARTEMIS (not decided)
+### Stage 3: base position estimation (proposed 2026-10-04, not started)
 
-ARTEMIS (Zhu, Ahn, Hong, UCLA RoMeLa; [paper](https://artemis.romela.org/static/pdfs/artemis_final.pdf)) walks at up to 2.1 m/s with an InEKF, an ALIP footstep planner, a QP trajectory planner and a torque-level whole-body QP at 500 Hz.  Its whole-body controller and estimator rely on hardware Robonion does not have (low-gear proprioceptive actuators commanded by feedforward torque, foot contact sensors, 23–30 rad/s joints), so they are not taken over; the NMPC on position-mode servos stays.  Parts that do not depend on that hardware and fit stage 3:
+The stage-2 estimator (`ContactProjectionEstimator`) takes the base x, y, z from the contacts alone: the contact points of the feet in contact are pinned in the world (`cref`), so any foot slip becomes a permanent position error, and the robot cannot measure slip (no contact sensing).  The supervisor rejected it for this drift.  The accelerometer is in the env observations but unused.
 
-1. **ALIP footstep planner** (Gong & Grizzle 2022, ARTEMIS ref. [40]): places the next footstep from the CoM state and the angular momentum about the contact point, so that the angular momentum at the end of the next step reaches a desired value.  Needs only the estimated state; its footsteps would enter `RobonionNMPC` as contact plan and swing-sole references.  An alternative to making footsteps NMPC decision variables (stage 3 above); targets the lateral push limit of stage 2 (±0.5 / +1.0 N·s).
+Proposed: the EKF of Bloesch, Hutter, Hoepflinger, Leutenegger, Gehring, Remy, Siegwart, *State Estimation for Legged Robots – Consistent Fusion of Leg Kinematics and IMU*, RSS 2012 ([proceedings](https://roboticsproceedings.org/rss08/p03.html), DOI 10.15607/RSS.2012.VIII.003):
+
+```text
+x = [r, v, q, p_1 … p_N, b_f, b_ω]        base position, velocity, orientation (world); foot contact points (world); IMU biases
+prediction:  ṙ = v,  v̇ = Cᵀ(f̃ − b_f − w_f) + g,  q̇ = ½ Ω(ω̃ − b_ω − w_ω) q,  ṗ_i = Cᵀ w_p,i
+update:      s̃_i = lkin_i(α̃) = C (p_i − r) + n_i         foot position relative to the base, from the encoders
+```
+
+- Slip is not measured: the process noise w_p,i lets a foot in contact move a little, and the leg-kinematics update corrects base and foot positions together.
+- A foot in the air gets a very large covariance on p_i, so its position resets on touchdown.
+- Observability-constrained EKF: Jacobians at the first estimates, so the filter does not become overconfident in the unobservable directions.
+- Absolute position and yaw are unobservable (paper §IV), so x, y, z still drift; the paper reports up to 10 % of the travelled distance on hardware.  The goal is a small drift with an honest covariance, not zero drift.
+
+Adaptation to Robonion:
+- One contact point per foot at the sole centre (the paper's point feet).  Foot orientation as a state, for flat soles (Rotella et al. 2014, *State Estimation for a Humanoid Robot*, [arXiv:1402.5450](https://arxiv.org/abs/1402.5450)), is a later option.
+- Contact from `ContactModeMonitor` (air or not) instead of foot force sensors.
+- Leg kinematics base → sole from the encoders with `PASSIVE_COUPLING`, from the controller URDF.
+- Bias estimation switchable at runtime as in the paper, off at first (the Isaac IMU noise is white only).
+- The filter keeps the full orientation; the NMPC still gets x, y, z, roll, pitch.
+
+Validation, offline first; the controller keeps the stage-2 estimator until the results are in:
+1. Record a stepping run in Isaac: encoders, AHRS, gyro, accelerometer, monitor modes, and the simulator base pose as truth (for measuring drift only).
+2. EKF prototype in `outputs/stage3_prototypes/`, replaying the record without Isaac (valid open loop, since the filter only observes).
+3. Drift of x, y, z against the truth in the world frame and against the stage-2 estimator, error inside 3σ, seeds 0, 1, 2 and one push.  Stepping in place travels no distance, so drift is reported in metres over the run length.
+
+### Footstep-adaptation candidates from ARTEMIS (stage 4, not decided)
+
+ARTEMIS (Zhu, Ahn, Hong, UCLA RoMeLa; [paper](https://artemis.romela.org/static/pdfs/artemis_final.pdf)) walks at up to 2.1 m/s with an InEKF, an ALIP footstep planner, a QP trajectory planner and a torque-level whole-body QP at 500 Hz.  Its whole-body controller and estimator rely on hardware Robonion does not have (low-gear proprioceptive actuators commanded by feedforward torque, foot contact sensors, 23–30 rad/s joints), so they are not taken over; the NMPC on position-mode servos stays.  Parts that do not depend on that hardware and fit stage 4:
+
+1. **ALIP footstep planner** (Gong & Grizzle 2022, ARTEMIS ref. [40]): places the next footstep from the CoM state and the angular momentum about the contact point, so that the angular momentum at the end of the next step reaches a desired value.  Needs only the estimated state; its footsteps would enter `RobonionNMPC` as contact plan and swing-sole references.  An alternative to making footsteps NMPC decision variables (stage 4 above); targets the lateral push limit of stage 2 (±0.5 / +1.0 N·s).
 2. **Event-based step timing**: a step ends on touchdown rather than on a fixed schedule, and the gait is parametrised by swing time and lift-off percentage (LOP, the point in the swing phase at which the stance foot may lift).  The stage-2 retiming rules already end single support on early / late touchdown; this would make it the gait's definition.  LOP below 100 % (flight phases, running) is out of reach for the 4.08 rad/s servos.
 
 ### LIPM/DCM MPC + IK analysis (historical)
@@ -159,7 +189,7 @@ Use OSQP (or `qpsolvers`) for the MPC and IK QPs and Pinocchio for kinematics; b
 ## Phase 2 — DCM MPC
 
 1. Model: LIPM with constant CoM height, `omega = sqrt(g / h)`, DCM `xi = c + c_dot / omega`, exact discretisation `xi[k+1] = e^(omega*dt) xi[k] + (1 - e^(omega*dt)) p[k]`.  Use the robot mass and CoM height from the verified model.
-2. Decision variables: ZMP `p[k]` over the horizon (start: 0.02 s nodes, 0.5 s horizon for standing; about 1 s / two steps for walking).  From stage 3 add the next footstep positions and the current step duration (via `sigma = e^(-omega*T)` to stay a QP).
+2. Decision variables: ZMP `p[k]` over the horizon (start: 0.02 s nodes, 0.5 s horizon for standing; about 1 s / two steps for walking).  From stage 4 add the next footstep positions and the current step duration (via `sigma = e^(-omega*T)` to stay a QP).
 3. Cost: DCM/velocity tracking, ZMP near the sole centre, ZMP rate, footstep deviation from nominal, step duration deviation from nominal.  Expose weights through a versioned configuration file rather than hard-coding them.
 4. Hard constraints: ZMP inside the support polygon (hull of both soles in double support, stance sole in single support), footstep reachability and minimum lateral spacing, step-duration bounds derived from servo speed limits, and a terminal DCM (capturability) constraint.
 5. Re-solve every control tick from the measured DCM; apply only the first ZMP and integrate it to the next CoM reference.  On solver failure, reuse the shifted previous solution for one tick and enter `safe_stop` after a bounded number of failures.

@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """
-Robonion controller: balance and stepping in place at the crouched pose (docs/stage2.md).
+Robonion controller
 
 Timeline: standing at the default pose, crouch ramp (straight legs are singular and too slow for the swing),
 AHRS bias calibration with both soles flat, then the gait plan (gait.py) runs through RobonionNMPC every tick.
@@ -59,8 +59,7 @@ CALM_DCM, CALM_SPEED, CALM_TIME = 0.01, 0.03, 0.2
 
 
 class State(Enum):
-    """Gait state; the contact modes of each tick select the next one.
-
+    """
     STEP     NMPC along the gait plan.
     HOLD     a sole on an edge, both feet down: targets held, plan paused.
     RESET    as HOLD, the sole resting still on its edge: targets move to the standing posture.
@@ -68,9 +67,6 @@ class State(Enum):
              targets at lift-off, step ended (holding everything, or landing the swing foot with the NMPC, fell
              more often in Isaac).
     RECOVER  after HOLD / RESET / CATCH with both feet down: NMPC standing, plan paused, until calm.
-
-    Any state -> CATCH / RESET / HOLD while a sole is on an edge; out of those -> RECOVER (both feet down) or STEP;
-    RECOVER -> STEP once calm or a foot is in the air.
     """
 
     STEP = "step"

@@ -4,22 +4,11 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """
-Base position estimation by fusing leg kinematics and the IMU (stage 3).
-
 Extended Kalman filter of Bloesch et al., "State Estimation for Legged Robots - Consistent Fusion of Leg
 Kinematics and IMU", RSS 2012 (references/papers/bloesch2012_rss.pdf):
 
 x = [r, v, R, p_left, p_right, b_f, b_w]     IMU position, velocity, orientation (world); foot contact points
                                              (world); accelerometer and gyro bias (IMU frame)
-
-The filter body is the IMU frame (imu_link on upper_body_link), so the accelerometer and gyro enter the
-prediction directly; the foot positions relative to it, s_i = R^T (p_i - r), come from the encoders through
-torso pitch and the legs. The base pose follows from the same kinematics. A foot in contact may slip by the
-process noise on p_i; a foot in the air is dropped and its contact point re-initialised on touchdown.
-
-Leg kinematics and the IMU leave absolute position and yaw unobservable (paper section IV). The yaw of the AHRS
-orientation (gyro + magnetometer fused inside the MTi-630) is an extra measurement, so the yaw stays bounded and
-the x, y axes of the filter follow the AHRS heading.
 
 Differences from the paper: the orientation error is a world-frame rotation vector (R = exp(dphi^) R_hat), which
 makes the orientation block of F the identity; the contact point of a foot follows its contact mode (sole centre
@@ -53,13 +42,6 @@ def _skew(a: np.ndarray) -> np.ndarray:
 
 class LegKinematicsEkf:
     """Base position and orientation from encoders, accelerometer and gyro, without contact sensing.
-
-    Noise parameters are continuous-time densities (std^2 per Hz) for the IMU and the foot slip, and std for the
-    kinematics. The gyro default is the Xsens MTi-630 leaflet value (0.007 deg/s/sqrt(Hz), also the env noise). The
-    accelerometer density is far above the leaflet's (60 ug/sqrt(Hz), 3.5e-7): one 200 Hz sample held for a tick
-    misrepresents the touchdown impacts (up to 31 m/s^2, world z averaging 0.16 m/s^2 over a stepping run in Isaac);
-    with the leaflet value z drifted 325 mm in 5 s with a 3 mm std, with 0.1 the error stayed within 2 mm. The
-    encoder std is about one Dynamixel tick (4096 per turn).
 
     yaw_std: of the AHRS yaw, the MTi-630 heading accuracy (about 1 deg in a clean magnetic field; near motors and
     steel it can be worse).
@@ -113,7 +95,9 @@ class LegKinematicsEkf:
         self._p_lin = np.zeros((2, 3))
 
     def _kinematics(self, q_act: np.ndarray, points: list[np.ndarray]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Contact points in the IMU frame (2 x 3) and the base pose in the IMU frame (R_ib, p_ib)."""
+        """
+        Contact points in the IMU frame (2 x 3) and the base pose in the IMU frame (R_ib, p_ib).
+        """
         q = pin.neutral(self.model)
         q[self._idx_q] = q_act
         for idx_q, src, gain in self._passive:
@@ -124,8 +108,10 @@ class LegKinematicsEkf:
         return s, imu.rotation.T, -imu.rotation.T @ imu.translation
 
     def _kinematics_cov(self, q_act: np.ndarray, points: list[np.ndarray], s: np.ndarray) -> np.ndarray:
-        """Covariance of each contact point in the IMU frame (2 x 3 x 3): model error plus encoder noise
-        through the leg Jacobian (paper eq. 25), the Jacobian by forward differences."""
+        """
+        Covariance of each contact point in the IMU frame (2 x 3 x 3): model error plus encoder noise
+        through the leg Jacobian, the Jacobian by forward differences.
+        """
         eps = 1e-6
         J = np.zeros((2, 3, len(q_act)))
         for k in range(len(q_act)):
@@ -135,7 +121,9 @@ class LegKinematicsEkf:
         return self.Rs * np.eye(3) + self.Ra * J @ J.transpose(0, 2, 1)
 
     def _init(self, s: np.ndarray, R_ahrs: np.ndarray, contact: list[bool]):
-        """Start with the AHRS orientation and the lowest contact point at height 0, x = y = 0 below the IMU."""
+        """
+        Start with the AHRS orientation and the lowest contact point at height 0, x = y = 0 below the IMU.
+        """
         self.R = R_ahrs.copy()
         feet = self.R @ s.T
         self.r = np.r_[0.0, 0.0, -feet[2, contact].min()]
@@ -153,7 +141,6 @@ class LegKinematicsEkf:
         self._p_lin = self.p.copy()
 
     def _reset_foot(self, i: int):
-        """Drop the foot from the estimate: no correlation, uncertainty far beyond any step (the paper's 'infinite')."""
         sl = slice(_P + 3 * i, _P + 3 * i + 3)
         self.P[sl, :] = 0.0
         self.P[:, sl] = 0.0
@@ -235,10 +222,7 @@ class LegKinematicsEkf:
         modes: list[str],
         dt: float,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """One tick. q_act, qd_act in act_names order; accel (with gravity, as an accelerometer reads it) and gyro
-        in the IMU frame; of the AHRS quaternion, the initial orientation and then the yaw are used. modes: contact
-        mode per foot (left, right) from ContactModeMonitor. Returns the base position, velocity and rotation in the
-        world."""
+        """Update the filter with the current measurements and contact modes, return the base pose and velocity."""
         q_act = np.asarray(q_act, dtype=float)
         points = [CONTACT_MODES[m][0] for m in modes]
         s, R_ib, p_ib = self._kinematics(q_act, points)

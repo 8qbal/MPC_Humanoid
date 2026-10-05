@@ -4,16 +4,10 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """
+
 Gait plan for stepping in place: contact schedule, DCM / CoM reference and swing-foot
 height.
 
-Timeline: stand -> DS (ZMP from the middle of the soles to the first stance sole) -> SS -> DS -> ... -> SS ->
-DS (ZMP back to the middle) -> stand. The ZMP is constant in single support and moves linearly in double
-support; the DCM follows from integrating xi_dot = omega (xi - p) backwards from rest at the end, the CoM from
-c_dot = omega (xi - c) forwards from rest at the start (both in closed form per phase). The reference is only a
-feedforward for the NMPC cost; feedback comes from the NMPC.
-
-Positions are in the yaw-free world frame of RigidContactModel (xy of the sole centres, z up).
 """
 
 from __future__ import annotations

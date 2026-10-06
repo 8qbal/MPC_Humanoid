@@ -87,7 +87,6 @@ Robonion_CFG = ArticulationCfg(
         "legs": DCMotorCfg(
             joint_names_expr=[
                 ".*_hip_roll_joint",
-                "left_front_thigh_pitch_joint",
                 ".*_ankle_pitch_joint",
                 ".*_ankle_roll_joint",
             ],
@@ -101,15 +100,15 @@ Robonion_CFG = ArticulationCfg(
             friction=URDF_FRICTION,
             armature=XH540_ARMATURE,
         ),
-        "right_thigh": DCMotorCfg(
+        "thigh": DCMotorCfg(
             joint_names_expr=[
-                "right_front_thigh_pitch_joint",
+                ".*_front_thigh_pitch_joint",
             ],
-            saturation_effort=URDF_LIMITS["right_thigh"][0],
-            actuator_effort_limit=URDF_LIMITS["right_thigh"][0],
-            actuator_velocity_limit=URDF_LIMITS["right_thigh"][1],
-            joint_effort_limit=URDF_LIMITS["right_thigh"][0],
-            joint_velocity_limit=URDF_LIMITS["right_thigh"][1],
+            saturation_effort=URDF_LIMITS["thigh"][0],
+            actuator_effort_limit=URDF_LIMITS["thigh"][0],
+            actuator_velocity_limit=URDF_LIMITS["thigh"][1],
+            joint_effort_limit=URDF_LIMITS["thigh"][0],
+            joint_velocity_limit=URDF_LIMITS["thigh"][1],
             stiffness=XH540_STIFFNESS,
             damping=XH540_DAMPING,
             friction=URDF_FRICTION,

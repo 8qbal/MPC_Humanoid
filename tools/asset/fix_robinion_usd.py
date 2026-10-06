@@ -1,7 +1,7 @@
 """Author the hand-made physics fixes on top of a converted Robinion USD.
 
 `urdf_usd_converter` can only reproduce what the URDF expresses: a *tree* of
-links and joints. The six fixes below carry information the URDF cannot (or
+links and joints. The seven fixes below carry information the URDF cannot (or
 gets wrong), so they are written as overrides in the root layer (robinion.usda). The Payload/
 folder stays exactly as the converter produced it, which keeps
 "converter output" and "our decisions" separable (diff the two files).
@@ -17,6 +17,8 @@ folder stays exactly as the converter produced it, which keeps
   5. left_back_thigh_pitch_link mass 0.078 -> 0.06 to match the right side.
   6. Ankle centre of mass shifted by the visual-mesh offset the URDF forgot to
      apply to the inertial origin (both ankle_roll_pitch links, 3.5 cm error).
+  7. left_front_thigh_pitch_joint effort limit 9.9 -> 19.8 to match the right side
+     (the controller and the actuator config use 19.8 for both legs).
 
 The script is idempotent: every fix checks the current state first, so it can
 be run on a fresh conversion or on a file already partly edited in the GUI.
@@ -226,6 +228,12 @@ def fix_ankle_com(stage):
         print(f"[6] {name}: centerOfMass {tuple(raw)} -> {tuple(attr.Get())}")
 
 
+def fix_thigh_effort_symmetry(stage):
+    joint = find_by_name(stage, "left_front_thigh_pitch_joint")
+    joint.GetAttribute("urdf:limit:effort").Set(19.8)
+    print("[7] left_front_thigh_pitch_joint: effort limit -> 19.8 (matches right side)")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("usd_path")
@@ -242,6 +250,7 @@ def main():
     if not args.no_mass_fix:
         fix_mass_symmetry(stage)
     fix_ankle_com(stage)
+    fix_thigh_effort_symmetry(stage)
 
     stage.GetRootLayer().Save()
     print("saved", args.usd_path)

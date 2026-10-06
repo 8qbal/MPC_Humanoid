@@ -73,8 +73,8 @@ EDGE_MODES = ("toe", "heel", "left_edge", "right_edge")
 
 
 def _effort(joint: str) -> float:
-    if joint == "right_front_thigh_pitch_joint":
-        return URDF_LIMITS["right_thigh"][0]
+    if joint.endswith("_front_thigh_pitch_joint"):
+        return URDF_LIMITS["thigh"][0]
     if joint == "torso_pitch_joint":
         return URDF_LIMITS["torso_arms"][0]
     return URDF_LIMITS["legs"][0]

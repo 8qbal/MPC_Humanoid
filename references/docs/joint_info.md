@@ -13,7 +13,7 @@ Reference sheet for building the Robonion `ArticulationCfg` in `source/MPC_Human
 | `references/Robinion_InverseKinematic/robinion_description/` | Second copy of the description with a mirrored `leg.xacro` (different axis signs) and `ik_controller_fullbody.py`. The IK script is the only document that states the **parallelogram coupling** between joints (see *Leg mechanism*). |
 
 Notes:
-- Actuators are **Dynamixel XH540-W270** (body/legs/arms) and **Dynamixel XH430-W350** (head), 11.1 V bus. The per-joint effort/velocity limits in the URDF (4.1 / 9.9 / 10.6 / 19.8 N·m; 3.14 / 4.08 / 4.82 rad/s) were **confirmed correct by the robot owner** and are used as-is in `ROBINION_CFG` (`URDF_LIMITS` in `robots/robonionv2.py`), except the left front thigh, which uses the right-leg 19.8 N·m (URDF has 9.9; user decision, see *Defects* item 2). Servo datasheets are only used for stiffness/damping/armature estimates.
+- Actuators are **Dynamixel XH540-W270** (body/legs/arms) and **Dynamixel XH430-W350** (head), 11.1 V bus. The per-joint effort/velocity limits in the URDF (4.1 / 9.9 / 10.6 / 19.8 N·m; 3.14 / 4.08 / 4.82 rad/s) were **confirmed correct by the robot owner** and are used as-is in `ROBINION_CFG` (`URDF_LIMITS` in `robots/robonionv2.py`), except the right front thigh, which uses 9.9 N·m like the left (one XH540-W270, the same servo as every leg joint; URDF has 19.8 on the right; user decision 2026-10-06, see *Defects* item 2). Servo datasheets are only used for stiffness/damping/armature estimates.
 - The knee joint (`*_knee_pitch_joint`) has **no actuator** (confirmed by the user).
 - **Two separate Isaac Sim installations exist on the dev machine, with two different converter versions** — see *USD verification* for why this matters before you re-run the GUI importer.
 
@@ -173,7 +173,7 @@ Note: right shoulder y-offset is −0.1305 but left is +0.0815 — the shoulders
 |---|---|---|---|---|---|---|---|---|---|---|
 | `right_hip_yaw_joint` | revolute | lower_body_link → right_hip_yaw_link | 0 −0.055 0 | 0 0 0 | 0 0 1 | 4.1 | 4.82 | ±1.5708 | 0.1 / 0 | actuated |
 | `right_hip_roll_joint` | revolute | right_hip_yaw_link → right_hip_roll_pitch_link | 0.047875 0 −0.05 | 0 0 0 | 1 0 0 | 9.9 | 4.08 | ±1.5708 | 0.1 / 0 | actuated |
-| `right_front_thigh_pitch_joint` | revolute | right_hip_roll_pitch_link → right_front_thigh_pitch_link | −0.0245 0.0245 0 | 0 0 0 | 0 1 0 | 19.8 | 4.08 | ±1.5708 | 0.1 / 0 | actuated (thigh-stage input) |
+| `right_front_thigh_pitch_joint` | revolute | right_hip_roll_pitch_link → right_front_thigh_pitch_link | −0.0245 0.0245 0 | 0 0 0 | 0 1 0 | **19.8 in URDF**, 9.9 in USD (fix 7; = left) | 4.08 | ±1.5708 | 0.1 / 0 | actuated (thigh-stage input) |
 | `right_back_thigh_pitch_joint` | revolute | right_hip_roll_pitch_link → right_back_thigh_pitch_link | −0.06575 0.0245 0 | 0 0 0 | 0 1 0 | 19.8 | 4.08 | ±1.5708 | 0.1 / 0 | passive, = front_thigh_pitch |
 | `right_knee_pitch_joint` | revolute | right_front_thigh_pitch_link → right_knee_pitch_link | 0 0 −0.2 | 0 0 0 | 0 1 0 | 19.8 | 4.08 | ±1.5708 | 0.1 / 0 | **passive, = −front_thigh_pitch (no motor)** |
 | `right_front_shin_pitch_joint` | revolute | right_knee_pitch_link → right_front_shin_pitch_link | 0 0 −0.04775 | 0 0 0 | 0 1 0 | 9.9 | 4.08 | ±1.5708 | 0.1 / 0 | passive, no actuator |
@@ -187,7 +187,7 @@ Note: right shoulder y-offset is −0.1305 but left is +0.0815 — the shoulders
 |---|---|---|---|---|---|---|---|---|---|---|
 | `left_hip_yaw_joint` | revolute | lower_body_link → left_hip_yaw_link | 0 0.055 0 | 0 0 0 | 0 0 1 | 4.1 | 4.82 | ±1.5708 | 0.1 / 0 | actuated |
 | `left_hip_roll_joint` | revolute | left_hip_yaw_link → left_hip_roll_pitch_link | 0.047875 0 −0.05 | 0 0 0 | 1 0 0 | 9.9 | 4.08 | ±1.5708 | 0.1 / 0 | actuated |
-| `left_front_thigh_pitch_joint` | revolute | left_hip_roll_pitch_link → left_front_thigh_pitch_link | −0.0245 0.0245 0 | 0 0 0 | 0 1 0 | **9.9 in URDF**, 19.8 in USD (fix 7; = right) | 4.08 | ±1.5708 | 0.1 / 0 | actuated (thigh-stage input) |
+| `left_front_thigh_pitch_joint` | revolute | left_hip_roll_pitch_link → left_front_thigh_pitch_link | −0.0245 0.0245 0 | 0 0 0 | 0 1 0 | 9.9 | 4.08 | ±1.5708 | 0.1 / 0 | actuated (thigh-stage input) |
 | `left_back_thigh_pitch_joint` | revolute | left_hip_roll_pitch_link → left_back_thigh_pitch_link | −0.06575 0.0245 0 | 0 0 0 | 0 1 0 | 19.8 | 4.08 | ±1.5708 | 0.1 / 0 | passive, = front_thigh_pitch |
 | `left_knee_pitch_joint` | revolute | left_front_thigh_pitch_link → left_knee_pitch_link | 0 0 −0.2 | 0 0 0 | 0 1 0 | 19.8 | 4.08 | ±1.5708 | 0.1 / 0 | **passive, = −front_thigh_pitch (no motor)** |
 | `left_front_shin_pitch_joint` | revolute | left_knee_pitch_link → left_front_shin_pitch_link | 0 0 −0.04775 | 0 0 0 | 0 1 0 | 9.9 | 4.08 | ±1.5708 | 0.1 / 0 | passive, no actuator |
@@ -247,7 +247,7 @@ Observation: `hip_roll_pitch_link` and `ankle_roll_pitch_link` share identical m
 ## Defects found in the URDF (must be fixed in the canonical copy)
 
 1. `*_foot_roll_link` has **izz = −0.000023** — negative principal inertia is physically invalid and will be rejected or silently "fixed" by importers (PhysX rejects it outright for an articulation link, even clamped to exactly 0). *Worked around in `assets/robonionv2.usd` by replacing the negative moment with `5.0e-4`, a value inside the physically valid range for this link (fix 4); the URDF itself is left unchanged.*
-2. Left/right asymmetries that look like typos: `left_front_thigh_pitch` effort 9.9 vs right 19.8; `left_back_thigh_pitch_link` mass 0.078 vs right 0.06. Both are equalised to the right side in the USD (fixes 5 and 7) and in the controller/actuator config.
+2. Left/right asymmetries that look like typos: `left_front_thigh_pitch` effort 9.9 vs right 19.8; `left_back_thigh_pitch_link` mass 0.078 vs right 0.06. The mass is equalised to the right side in the USD (fix 5). The effort is 9.9 N·m on both sides in the controller/actuator config (`URDF_LIMITS["legs"]`, user decision 2026-10-06); the USD metadata matches since fix 7 sets 9.9 on both sides.
 3. Thigh/shin bar inertia tensors are copy-pasted (identical for 0.06 kg and 0.079 kg parts).
 4. Loop-closure joints for both parallelograms are absent (URDF limitation) — the passive joints are unconstrained in any simulator that loads the file as-is. *Added in `assets/robonionv2.usd`.*
 5. Shoulder mount y-offsets are not symmetric about the pelvis.
@@ -306,7 +306,7 @@ The URDF only expresses a *tree*, so `urdf_usd_converter` cannot produce these o
 4. **Negative inertia fix**: URDF gives `*_foot_roll_link` `izz = -2.3e-5`, a negative principal moment (invalid). PhysX requires every principal moment to be strictly `> 0` for an articulation link, so clamping to `0` is rejected too (`PxRigidBody::setMassSpaceInertiaTensor(): components must be > 0 for articulations`). `fix_robinion_usd.py` scans every prim with `physics:diagonalInertia` and replaces any non-positive component with `NEGATIVE_INERTIA_REPLACEMENT = 5.0e-4` (also in `newton:inertia`), leaving the other moments, CoM and principal axes untouched: `diagonalInertia = (5.0e-4, 8.098e-5, 5.570e-4)`. `5.0e-4` comes from the triangle inequality every rigid body's principal moments must satisfy (`|Ixx-Iyy| <= Izz <= Ixx+Iyy`, giving `[4.76e-4, 6.38e-4]` here) cross-checked against a uniform-box estimate from the foot mesh's bounding box (`~6.70e-4`); see the script for the derivation. The inertia is deliberately *not* recomputed from the STL.
 5. **`left_back_thigh_pitch_link` mass** 0.078 → 0.06 kg, to match `right_back_thigh_pitch_link` (URDF asymmetry, presumed typo — see *Defects* item 2).
 
-7. **`left_front_thigh_pitch_joint` effort limit** 9.9 → 19.8 N·m (`urdf:limit:effort`), to match the right side (user decision; URDF asymmetry presumed typo, see *Defects* item 2). Simulation limits come from `robots/robonion_params.py` (`URDF_LIMITS["thigh"]`), so this only keeps the USD metadata consistent.
+7. **Front-thigh effort limit 9.9 N·m on both sides** (`urdf:limit:effort`): `right_front_thigh_pitch_joint` 19.8 → 9.9; the left one is authored too (9.9, its URDF value), replacing an earlier 19.8 override. Both front thighs are one XH540-W270 (9.9 N·m stall at 12 V; user decision 2026-10-06, see *Defects* item 2). Simulation limits come from `robots/robonion_params.py` (`URDF_LIMITS["legs"]`), so this keeps the USD metadata and the exported controller URDF consistent with the config.
 
 `tools/asset/fix_robinion_usd.py` implements fixes 1-7 (the list above covers the authored-physics ones); pass `--no-mass-fix` to skip #5 if you'd rather leave the asymmetry in place.
 
@@ -330,7 +330,7 @@ Counter({'INFO': 7, 'WARN': 2})
 [INFO] joint base_to_lower_body_fixed_joint (fixed) missing/inactive  (fix 3)
 [INFO] joint imu_fixed_joint (fixed) missing/inactive  (converter merges massless links)
 [INFO] joint cam_fixed_joint (fixed) missing/inactive  (converter merges massless links)
-[WARN] left_front_thigh_pitch_joint: effort 19.8 != urdf 9.9  (fix 7)
+[WARN] right_front_thigh_pitch_joint: effort 9.9 != urdf 19.8  (fix 7)
 ```
 
 Everything else matches the URDF exactly: 35 links, 34 joints (29 revolute + 5 fixed), all transforms/mass/CoM/inertia/mesh/collision data, all 4 loop-joint anchors at 0.000 mm gap, self-collision off, no stray `PhysicsScene`/viewport prims in the flattened file, and `layers used: ['assets/robonionv2.usd']` (standalone, no dependency on `assets/robonionv2/` or `references/`).

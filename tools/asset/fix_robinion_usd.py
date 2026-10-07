@@ -17,8 +17,9 @@ folder stays exactly as the converter produced it, which keeps
   5. left_back_thigh_pitch_link mass 0.078 -> 0.06 to match the right side.
   6. Ankle centre of mass shifted by the visual-mesh offset the URDF forgot to
      apply to the inertial origin (both ankle_roll_pitch links, 3.5 cm error).
-  7. left_front_thigh_pitch_joint effort limit 9.9 -> 19.8 to match the right side
-     (the controller and the actuator config use 19.8 for both legs).
+  7. Front-thigh effort limit 9.9 N·m on both sides: right_front_thigh_pitch_joint 19.8 -> 9.9.
+     Both are one XH540-W270 (9.9 N·m stall at 12 V), as in the controller and the actuator config.
+     The left one is authored too, so an earlier 19.8 override in the root layer is replaced.
 
 The script is idempotent: every fix checks the current state first, so it can
 be run on a fresh conversion or on a file already partly edited in the GUI.
@@ -229,9 +230,10 @@ def fix_ankle_com(stage):
 
 
 def fix_thigh_effort_symmetry(stage):
-    joint = find_by_name(stage, "left_front_thigh_pitch_joint")
-    joint.GetAttribute("urdf:limit:effort").Set(19.8)
-    print("[7] left_front_thigh_pitch_joint: effort limit -> 19.8 (matches right side)")
+    for side in ("left", "right"):
+        joint = find_by_name(stage, f"{side}_front_thigh_pitch_joint")
+        joint.GetAttribute("urdf:limit:effort").Set(9.9)
+        print(f"[7] {side}_front_thigh_pitch_joint: effort limit -> 9.9 (one XH540-W270)")
 
 
 def main():

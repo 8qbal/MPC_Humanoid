@@ -5,8 +5,8 @@
 
 """
 Manager-based env for the Robonion MPC controller.
-The controller reads observations from and writes actions into this env's managers directly,
-so it is a plain ``ManagerBasedEnvCfg`` (no reward/termination managers).
+The controller reads observations from and writes actions into this env's managers directly
+plain ``ManagerBasedEnvCfg``
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ from isaaclab_physx.physics import PhysxCfg
 
 from ..robots.robonionv2 import Robonion_CFG
 
-# Independently actuated joints: legs, torso, arms, and head groups from Robonion_CFG.
+# Independently actuated joints
 _ACTUATED_JOINTS = [
     ".*_hip_yaw_joint",
     ".*_hip_roll_joint",
@@ -49,9 +49,7 @@ _IMU_PATH = "{ENV_REGEX_NS}/Robot/.*/upper_body_link/imu_link"
 
 
 @configclass
-class MpcHumanoidRobonionSceneCfg(InteractiveSceneCfg):
-    """Flat-ground scene holding a single Robonion robot."""
-
+class MpcHumanoidRobonionSceneCfg(InteractiveSceneCfg):    
     ground = AssetBaseCfg(
         prim_path="/World/ground",
         spawn=sim_utils.CuboidCfg(
@@ -65,7 +63,7 @@ class MpcHumanoidRobonionSceneCfg(InteractiveSceneCfg):
 
     robot: ArticulationCfg = Robonion_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
 
-    # Xsens MTi-630 AHRS at imu_link: gyro + accel (ImuCfg) and fused orientation (PvaCfg).
+    # Xsens MTi-630 AHRS gyro + accel (ImuCfg) and fused orientation (PvaCfg).
     imu = ImuCfg(prim_path=_IMU_PATH, update_period=0.0)
     ahrs = PvaCfg(prim_path=_IMU_PATH, update_period=0.0)
 
@@ -73,9 +71,6 @@ class MpcHumanoidRobonionSceneCfg(InteractiveSceneCfg):
         prim_path="/World/DomeLight",
         spawn=sim_utils.DomeLightCfg(color=(0.9, 0.9, 0.9), intensity=500.0),
     )
-
-
-# MDP settings.
 
 
 @configclass
@@ -119,10 +114,6 @@ class ObservationsCfg:
 class EventsCfg:
     reset_scene = EventTerm(func=mdp.reset_scene_to_default, mode="reset", params={"reset_joint_targets": True})
 
-
-# Environment configuration.
-
-
 @configclass
 class MpcHumanoidRobonionEnvCfg(ManagerBasedEnvCfg):
     """Single-robot, flat-ground, deterministic PhysX environment for the Robonion MPC controller."""
@@ -132,7 +123,7 @@ class MpcHumanoidRobonionEnvCfg(ManagerBasedEnvCfg):
     actions: ActionsCfg = ActionsCfg()
     events: EventsCfg = EventsCfg()
 
-    # TODO: do more research on the freq (match motor freq with mpc and ahrs (do a double sampling?))
+    # TODO: do more research on the freq (match motor freq with mpc and ahrs
     def __post_init__(self) -> None:
         self.seed = 0
         self.decimation = 5

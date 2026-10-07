@@ -1,11 +1,11 @@
 # Ref for mpc model builder and the isaac sim
 
-# Motor limits from references/robinion_description/robinion2.urdf, except the left front thigh, which uses the right-leg value
+# Motor limits from references/robinion_description/robinion2.urdf, except the right front thigh: one XH540-W270 like
+# every leg joint (9.9 N·m stall at 12 V), so 9.9 as on the left (URDF has 19.8 on the right; user decision)
 URDF_LIMITS = {  # key <-> value: (effort [N·m], velocity [rad/s])
     "yaw": (4.1, 4.82),  # hip yaw, elbow yaw, head yaw
     "torso_arms": (10.6, 3.14),  # torso pitch, shoulder pitch/roll, elbow pitch
-    "legs": (9.9, 4.08),  # hip roll, ankle pitch/roll
-    "thigh": (19.8, 4.08),  # front thigh pitch, both legs (URDF has 9.9 on the left)
+    "legs": (9.9, 4.08),  # hip roll, front thigh pitch, ankle pitch/roll
 }
 URDF_FRICTION = 0.0  # N·m
 

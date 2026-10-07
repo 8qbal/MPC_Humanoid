@@ -1,5 +1,5 @@
 <?xml version="1.0"?>
-<!-- Generated from assets/robonionv2.usd by tools/asset/export_controller_urdf.py with fixed dynamics from assets/robonionv2.usd -- do not edit!!! -->
+<!-- Generated from assets/robonionv2.usd by tools/asset/export_controller_urdf.py -- do not edit -->
 <robot name="robinion">
   <link name="lower_body_link">
     <inertial>
@@ -344,7 +344,7 @@
     <parent link="right_hip_roll_pitch_link" />
     <child link="right_front_thigh_pitch_link" />
     <axis xyz="0 1 0" />
-    <limit lower="-1.57079633" upper="1.57079633" effort="19.7999992" velocity="4.08000007" />
+    <limit lower="-1.57079633" upper="1.57079633" effort="9.89999962" velocity="4.08000007" />
     <dynamics damping="0.0999999992" friction="0" />
   </joint>
   <joint name="right_back_thigh_pitch_joint" type="revolute">

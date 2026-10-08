@@ -245,7 +245,7 @@ class RobonionController:
         self._bias = mean[:2] - q_stand[3:5]
         self.monitor.calibrate(np.r_[0.0, 0.0, 0.0, mean[:2] - self._bias, mean[2:]])
 
-        x, y, z, w = imu_quat_xyzw / np.linalg.norm(imu_quat_xyzw)
+        x, y, z, w = np.asarray(imu_quat_xyzw, dtype=float) / np.linalg.norm(imu_quat_xyzw)
         R_ib = self.ekf.R.T @ self._ekf_base[2]
         R_base = pin.Quaternion(w, x, y, z).matrix() @ R_ib
         yaw = math.atan2(R_base[1, 0], R_base[0, 0])

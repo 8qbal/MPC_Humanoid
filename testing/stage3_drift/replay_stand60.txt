@@ -1,0 +1,5 @@
+error in mm at the end of the run: displacement of the estimate minus the true displacement since the anchor
+run                            x       y       z  xy@gait  xy end  xy max   mm/s  travel
+stand60_seed0               -0.9    -5.0     0.0      0.9     5.1     5.2   0.05    29.8
+replay vs online estimate of the recorded run: max difference 0.000 mm
+figure -> drift_stand60.png

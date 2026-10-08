@@ -15,6 +15,7 @@ Usage:
     uv run python scripts/run_stepping.py --push x+1.75              # push +x with 1.75 N*s mid single support
     uv run python scripts/run_stepping.py --viz kit                  # with the Isaac Sim window
     uv run python scripts/run_stepping.py --record run.npz           # inputs for scripts/benchmark_stepping.py
+    uv run python scripts/run_stepping.py --trace trace.npz          # estimator state and simulator truth (stage 3)
 """
 
 import argparse
@@ -30,6 +31,9 @@ parser.add_argument("--push", default=None, help="axis and impulse [N*s], e.g. x
 parser.add_argument("--push_at", default="mid_ss", choices=("mid_ss", "ds"))
 parser.add_argument("--push_duration", type=float, default=0.05, help="[s]")
 parser.add_argument("--record", default=None, help="save the controller inputs and outputs per tick to this .npz")
+parser.add_argument(
+    "--trace", default=None, help="save the estimator state and the simulator base truth per gait tick to this .npz"
+)
 parser.add_argument("--seed", type=int, default=0, help="env seed: the sensor-noise realization (AHRS bias, gyro)")
 AppLauncher.add_app_launcher_args(parser)
 args = parser.parse_args()
@@ -48,6 +52,7 @@ from isaaclab.envs import ManagerBasedEnv
 
 from MPC_Humanoid.env import MpcHumanoidRobonionEnvCfg
 from MPC_Humanoid.mpc.controller import RobonionController
+from MPC_Humanoid.mpc.ekf import roll_pitch
 from MPC_Humanoid.mpc.gait import GaitParams
 from MPC_Humanoid.mpc.model import SOLE_CORNERS
 
@@ -64,6 +69,37 @@ def sole_lows(pose: np.ndarray, feet: list[int]) -> np.ndarray:
         R = pin.Quaternion(w, x, y, z).matrix()
         lows.append((pose[b, :3][:, None] + R @ SOLE_CORNERS.T)[2].min())
     return np.array(lows)
+
+
+def trace_row(controller: RobonionController, inputs: tuple, root_pose: np.ndarray, root_vel: np.ndarray) -> dict:
+    """Copy of the estimator state of the tick just run, and the simulator root pose ([pos, quat xyzw]) and velocity
+    ([lin, ang], world) it was measured at. The truth is for scoring only, it never reaches the controller."""
+    c, st = controller, controller.status
+    roll, pitch, _, _ = c.ahrs(*inputs[:4])
+    x, y, z, w = (float(v) for v in root_pose[3:])
+    flags, pc = c._cfg
+    base_pos, base_vel, base_R = c._ekf_base
+    return {
+        "t": st.plan_time,
+        "modes": list(st.modes),
+        "truth_pose": root_pose,
+        "truth_vel": root_vel,
+        "q": np.array(st.q),
+        "qd": np.array(st.qd),
+        "ekf_r": np.array(c.ekf.r),
+        "ekf_v": np.array(c.ekf.v),
+        "ekf_R": np.array(c.ekf.R),
+        "ekf_p": np.array(c.ekf.p),
+        "ekf_P": np.array(c.ekf.P),
+        "ekf_base_pos": np.array(base_pos),
+        "ekf_base_vel": np.array(base_vel),
+        "ekf_base_R": np.array(base_R),
+        "tilt_ahrs": np.array([roll, pitch]) - c._bias,
+        "tilt_ekf": roll_pitch(base_R),
+        "tilt_truth": roll_pitch(pin.Quaternion(w, x, y, z).matrix()),
+        "crow_err": flags * (np.array(c.model.f_crow(st.q, pc)).ravel() - c._cref),
+        "jc_qd": float(np.linalg.norm(flags * (np.array(c.model.f_Jc(st.q, pc)) @ st.qd))),
+    }
 
 
 def main() -> None:
@@ -99,8 +135,9 @@ def main() -> None:
     displacement = np.zeros(2)
     fell = False
     ticks, solve_times = [], []
-    qp_failures = held = 0
+    qp_failures = qp_iter_limit = held = 0
     record = {k: [] for k in ("q_act", "qd_act", "quat", "gyro", "accel", "q_des")}
+    trace = []
     step = 0
 
     while True:
@@ -131,6 +168,10 @@ def main() -> None:
             state[obs_slice["imu_lin_acc"]],
         )
 
+        if args.trace:
+            root_pose = robot.data.root_link_pose_w.torch[0].cpu().numpy().astype(float)
+            root_vel = robot.data.root_link_vel_w.torch[0].cpu().numpy().astype(float)
+
         t0 = time.perf_counter()
         q_des = controller.step(*inputs)
         if args.record:
@@ -140,10 +181,13 @@ def main() -> None:
         st = controller.status
         if st.plan_time is not None:
             ticks.append(time.perf_counter() - t0)
+            if args.trace:
+                trace.append(trace_row(controller, inputs, root_pose, root_vel))
             held += st.holding
             if st.solve_time is not None:
                 solve_times.append(st.solve_time)
                 qp_failures += st.qp_status not in (0, 2)
+                qp_iter_limit += st.qp_status == 2
 
         action = torch.tensor(q_des - q_default_act, dtype=torch.float32, device=env.device).unsqueeze(0)
         obs, _ = env.step(action)
@@ -178,7 +222,8 @@ def main() -> None:
         print(
             f"controller tick (estimation + NMPC) mean/p95/max {tk.mean():.2f}/{np.percentile(tk, 95):.2f}/"
             f"{tk.max():.2f} ms; NMPC solve mean/max {np.mean(solve_times) * 1000:.2f}/"
-            f"{np.max(solve_times) * 1000:.2f} ms, QP failures {qp_failures}"
+            f"{np.max(solve_times) * 1000:.2f} ms, QP failures {qp_failures}, QP iteration limit {qp_iter_limit}, "
+            f"NaN resets {controller.nmpc.nan_resets}"
         )
 
     if args.record:
@@ -189,6 +234,16 @@ def main() -> None:
             step_dt=env.step_dt,
             params=np.array([params.t_ss, params.t_ds, params.clearance, params.n_steps]),
             **{k: np.array(v) for k, v in record.items()},
+        )
+
+    if args.trace and trace:
+        np.savez(
+            args.trace,
+            step_dt=env.step_dt,
+            seed=args.seed,
+            push=str(args.push),
+            push_t=np.nan if push_t is None else push_t,
+            **{k: np.array([row[k] for row in trace]) for k in trace[0]},
         )
 
     env.close()

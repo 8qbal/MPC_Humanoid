@@ -1,0 +1,4 @@
+error in mm at the end of the run: displacement of the estimate minus the true displacement since the anchor
+run                            x       y       z  xy@gait  xy end  xy max   mm/s  travel
+viz_seed0                    0.0    -3.5    -0.1      0.9     3.5     3.5   0.19    25.5
+replay vs online estimate of the recorded run: max difference 0.000 mm

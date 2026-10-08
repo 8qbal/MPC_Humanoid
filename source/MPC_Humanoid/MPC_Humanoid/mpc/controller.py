@@ -7,12 +7,14 @@
 Robonion controller
 
 Timeline: standing at the default pose, crouch ramp (straight legs are singular and too slow for the swing),
-AHRS bias calibration with both soles flat, then the gait plan (gait.py) runs through RobonionNMPC every tick.
+AHRS bias calibration with both soles flat, then the gait plan (gait.py) runs through RobonionNMPC.
 
 Every tick: AHRS/gyro -> contact modes (ContactModeMonitor) -> base position and velocity (LegKinematicsEkf) ->
-joints and tilt on the contact manifold (ContactProjectionEstimator) -> gait logic -> RobonionNMPC -> servo targets
-of the 9 model joints; the other actuated joints hold their defaults. Node 0 of the contact plan is the measured
-mode, later nodes follow the gait plan. The gait logic is a state machine (State), each rule justified by an Isaac
+joints and tilt on the contact manifold (ContactProjectionEstimator) -> gait logic -> servo targets of the 9 model
+joints; the other actuated joints hold their defaults. The NMPC runs every NMPC_EVERY ticks, and at once when the
+contact plan of node 0 changes; on the ticks between, the targets continue at the rate of its first interval and the
+tick before the next NMPC run does the RTI preparation, so preparation and feedback never share a tick. Node 0 of
+the contact plan is the measured mode, later nodes follow the gait plan. The gait logic is a state machine (State), each rule justified by an Isaac
 failure in docs/stage2.md; within STEP:
 
 - a foot scheduled to swing that tips onto an edge while the other sole is flat is peeling off: it is planned
@@ -57,6 +59,9 @@ RECOVER_TIME, PAUSE_AFTER, MAX_PAUSE = 0.6, 0.1, 3.0
 # After a hold the NMPC stands until the DCM is within CALM_DCM of the middle of the soles and the CoM speed
 # below CALM_SPEED for CALM_TIME.
 CALM_DCM, CALM_SPEED, CALM_TIME = 0.01, 0.03, 0.2
+# NMPC at 100 Hz under the 200 Hz estimation and gait logic, so the edge and touchdown tuning stays at 5 ms
+# (docs/stage3.md, decision of 2026-10-07)
+NMPC_EVERY = 2
 
 
 class State(Enum):
@@ -125,7 +130,7 @@ class RobonionController:
         self.monitor = ContactModeMonitor(self.model, lead=MONITOR_LEAD, rate_ticks=MONITOR_TICKS)
         self.estimator = ContactProjectionEstimator(self.model, compiled=True, build=build)
         self.nmpc = RobonionNMPC(self.model, build=build)
-        self.ekf = LegKinematicsEkf(self.act_names)
+        self.ekf = LegKinematicsEkf(self.act_names, compiled=True, build=build)
 
         self.reset()
 
@@ -154,7 +159,9 @@ class RobonionController:
         self._calm = 0.0
         self._tilt_hist = []
         self._prepared = None
-        self.status = ControllerStatus(["flat", "flat"], None, None, None, False, None, None, self.state)
+        self._since_nmpc = 0  # ticks since the NMPC last ran
+        self._v = np.zeros(len(self.ind))  # target rate of the first NMPC interval
+        self.status =ControllerStatus(["flat", "flat"], None, None, None, False, None, None, self.state)
 
     def step(
         self,
@@ -351,14 +358,24 @@ class RobonionController:
         return u
 
     def _run_nmpc(self, t, q, qd, now):
-        u = self.u
-        if self._prepared == now:
-            u, status, solve_time = self.nmpc.feedback(q, qd, u, self.dt)
+        if self._since_nmpc < NMPC_EVERY - 1 and self._prepared is not None and self._prepared[0] == now:
+            self._since_nmpc += 1
+            if self._since_nmpc == NMPC_EVERY - 1:
+                # linearise for the next NMPC tick now that this tick's targets are known
+                self.nmpc.prepare(q, qd, self._nodes(t + self.dt, now))
+                self._prepared = (now, True)
+            return self.u + self._v * self.dt
+
+        if self._prepared == (now, True):
+            u, status, solve_time = self.nmpc.feedback(q, qd, self.u, self.dt)
         else:
-            u, status, solve_time = self.nmpc.solve(q, qd, u, self._nodes(t, now), self.dt)
-        # linearise for the next tick now that this tick's targets are known
-        self.nmpc.prepare(q, qd, self._nodes(t + self.dt, now))
-        self._prepared = now
+            u, status, solve_time = self.nmpc.solve(q, qd, self.u, self._nodes(t, now), self.dt)
+        self._v = (u - self.u) / self.dt
+        self._since_nmpc = 0
+        self._prepared = (now, False)
+        if NMPC_EVERY == 1:
+            self.nmpc.prepare(q, qd, self._nodes(t + self.dt, now))
+            self._prepared = (now, True)
         return u, status, solve_time
 
     def _hold(self, t):

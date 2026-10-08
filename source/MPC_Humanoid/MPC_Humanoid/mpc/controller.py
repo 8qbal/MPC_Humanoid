@@ -28,8 +28,9 @@ from dataclasses import dataclass
 from enum import Enum
 
 import numpy as np
+import pinocchio as pin
 
-from .ekf import LegKinematicsEkf
+from .ekf import LegKinematicsEkf, roll_pitch
 from .estimator import AhrsGyro, ContactModeMonitor, ContactProjectionEstimator
 from .gait import GaitParams, GaitPlan
 from .model import EDGE_MODES, MODEL_JOINTS, RigidContactModel, contact_config
@@ -168,8 +169,10 @@ class RobonionController:
         roll, pitch, roll_d, pitch_d = self.ahrs(q_act, qd_act, imu_quat_xyzw, gyro)
         joints, joints_d = q_act[self.ind], qd_act[self.ind]
         self.t += self.dt
-        ekf_modes = list(self.status.modes) if self.t >= GAIT_START else ["flat", "flat"]
-        self._ekf_base = self.ekf.update(q_act, qd_act, accel, gyro, imu_quat_xyzw, ekf_modes, self.dt)
+        # the monitor needs the AHRS bias, so the EKF sees flat/flat up to and including the tick that sets it
+        starting = self._bias is None
+        if starting:
+            self._ekf_base = self.ekf.update(q_act, qd_act, accel, gyro, imu_quat_xyzw, ["flat", "flat"], self.dt)
 
         if self.t < GAIT_START:
             s = min(max((self.t - CROUCH_START) / CROUCH_TIME, 0.0), 1.0)
@@ -178,14 +181,19 @@ class RobonionController:
                 self._calib.append(np.r_[roll, pitch, joints])
             return self.q_des
 
-        if self._bias is None:
-            self._start()
+        if starting:
+            self._start(q_act, qd_act, imu_quat_xyzw, roll, pitch)
 
         r, p = roll - self._bias[0], pitch - self._bias[1]
         q_meas = np.r_[0.0, 0.0, 0.0, r, p, joints]
-        meas = (joints, r, p, joints_d, roll_d, pitch_d)
 
         modes, changed = self.monitor.update(q_meas, np.r_[0.0, 0.0, 0.0, roll_d, pitch_d, joints_d])
+        if not starting:
+            self._ekf_base = self.ekf.update(
+                q_act, qd_act, accel, gyro, imu_quat_xyzw, modes, self.dt, np.array([r, p])
+            )
+        # the monitor keeps the AHRS tilt its thresholds were tuned on; the projection starts from the EKF tilt
+        meas = (joints, *roll_pitch(self._ekf_base[2]), joints_d, roll_d, pitch_d)
         if any(changed):
             self._cfg = contact_config(*modes)
             self._cref = self.model.update_refs(self._cref, self.estimator.q, self._cfg[1], changed)
@@ -229,12 +237,20 @@ class RobonionController:
         Rz = np.array([[c, s, 0.0], [-s, c, 0.0], [0.0, 0.0, 1.0]])
         self._ekf_frame = (Rz, q_stand[:3] - Rz @ pos)
 
-    def _start(self):
-        """End of calibration: AHRS bias, contact references, gait plan and NMPC initial guess."""
+    def _start(self, q_act, qd_act, imu_quat_xyzw, roll, pitch):
+        """End of calibration: AHRS bias, EKF restart with the bias-corrected AHRS, contact references, gait plan
+        and NMPC initial guess."""
         mean = np.mean(self._calib, axis=0)
         q_stand, self._cref = self.model.initial_state(mean[2:])
         self._bias = mean[:2] - q_stand[3:5]
         self.monitor.calibrate(np.r_[0.0, 0.0, 0.0, mean[:2] - self._bias, mean[2:]])
+
+        x, y, z, w = imu_quat_xyzw / np.linalg.norm(imu_quat_xyzw)
+        R_ib = self.ekf.R.T @ self._ekf_base[2]
+        R_base = pin.Quaternion(w, x, y, z).matrix() @ R_ib
+        yaw = math.atan2(R_base[1, 0], R_base[0, 0])
+        R_base = pin.rpy.rpyToMatrix(roll - self._bias[0], pitch - self._bias[1], yaw)
+        self._ekf_base = self.ekf.reinit(q_act, qd_act, R_base @ R_ib.T)
         self._align_ekf(q_stand)
 
         self._home = self._cref.copy()

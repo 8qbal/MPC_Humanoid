@@ -13,7 +13,8 @@ x = [r, v, R, p_left, p_right, b_f, b_w]     IMU position, velocity, orientation
 Differences from the paper: the orientation error is a world-frame rotation vector (R = exp(dphi^) R_hat), which
 makes the orientation block of F the identity; the contact point of a foot follows its contact mode (sole centre
 when flat, the edge it rolls on otherwise, CONTACT_MODES) and moves with the sole kinematics when the mode changes;
-the discrete process noise is first order in dt.
+the propagation from tick k-1 to k uses the mean of the IMU readings at k-1 and k (the reading at k-1 alone lags
+the orientation, velocity and position by half a tick); the discrete process noise is first order in dt.
 """
 
 from __future__ import annotations
@@ -32,6 +33,11 @@ def _yaw(R: np.ndarray) -> float:
     return float(np.arctan2(R[1, 0], R[0, 0]))
 
 
+def roll_pitch(R: np.ndarray) -> np.ndarray:
+    """Roll and pitch of R = Rz(yaw) Ry(pitch) Rx(roll), the AhrsGyro convention; independent of yaw."""
+    return np.array([np.arctan2(R[2, 1], R[2, 2]), -np.arcsin(np.clip(R[2, 0], -1.0, 1.0))])
+
+
 def _wrap(a: float) -> float:
     return float((a + np.pi) % (2 * np.pi) - np.pi)
 
@@ -45,6 +51,8 @@ class LegKinematicsEkf:
 
     yaw_std: of the AHRS yaw, the MTi-630 heading accuracy (about 1 deg in a clean magnetic field; near motors and
     steel it can be worse).
+
+    tilt_std: of the base roll and pitch passed to update() (AHRS minus its calibrated mounting bias).
 
     estimate_bias: off by default; the paper switches it at runtime because typical gaits lie close to the cases
     where the biases are unobservable, and the Isaac IMU has no bias.
@@ -61,6 +69,7 @@ class LegKinematicsEkf:
         kinematics_std: float = 0.002,
         encoder_std: float = 2 * np.pi / 4096,
         yaw_std: float = np.radians(1.0),
+        tilt_std: float = np.radians(0.02),
         estimate_bias: bool = False,
     ):
         self.act_names = list(act_names)
@@ -81,6 +90,7 @@ class LegKinematicsEkf:
         self.Qp = slip_density
         self.Rs, self.Ra = kinematics_std**2, encoder_std**2
         self.Ryaw = yaw_std**2
+        self.Rtilt = tilt_std**2
         self.estimate_bias = estimate_bias
         self.reset()
 
@@ -182,9 +192,18 @@ class LegKinematicsEkf:
             Q[_BW : _BW + 3, _BW : _BW + 3] = dt * self.Qbw * np.eye(3)
         self.P = F @ self.P @ F.T + Q
 
-    def _correct(self, s: np.ndarray, S: np.ndarray, feet: list[int], R_ahrs: np.ndarray):
-        """Leg-kinematics update (paper eqs. 46-53) plus the AHRS yaw, Jacobians at the first estimates."""
-        m = 3 * len(feet) + 1
+    def _correct(
+        self,
+        s: np.ndarray,
+        S: np.ndarray,
+        feet: list[int],
+        R_ahrs: np.ndarray,
+        R_ib: np.ndarray,
+        tilt: np.ndarray | None,
+    ):
+        """Leg-kinematics update (paper eqs. 46-53) plus the AHRS yaw and, when given, the base roll and pitch;
+        Jacobians at the first estimates."""
+        m = 3 * len(feet) + 1 + (tilt is not None) * 2
         y, H, Rk = np.zeros(m), np.zeros((m, _N)), np.zeros((m, m))
         for k, i in enumerate(feet):
             rows = slice(3 * k, 3 * k + 3)
@@ -193,12 +212,21 @@ class LegKinematicsEkf:
             H[rows, _PHI : _PHI + 3] = self._R_lin.T @ _skew(self._p_lin[i] - self._r_lin)
             H[rows, _P + 3 * i : _P + 3 * i + 3] = self._R_lin.T
             Rk[rows, rows] = S[i]
-        y[-1] = _wrap(_yaw(R_ahrs) - _yaw(self.R))
+        k = 3 * len(feet)
+        y[k] = _wrap(_yaw(R_ahrs) - _yaw(self.R))
         eps = 1e-6
-        H[-1, _PHI : _PHI + 3] = [
+        H[k, _PHI : _PHI + 3] = [
             _wrap(_yaw(pin.exp3(eps * e) @ self._R_lin) - _yaw(self._R_lin)) / eps for e in np.eye(3)
         ]
-        Rk[-1, -1] = self.Ryaw
+        Rk[k, k] = self.Ryaw
+        if tilt is not None:
+            rows = slice(k + 1, k + 3)
+            rp = roll_pitch(self._R_lin @ R_ib)
+            y[rows] = [_wrap(a) for a in np.asarray(tilt) - roll_pitch(self.R @ R_ib)]
+            H[rows, _PHI : _PHI + 3] = (
+                np.array([roll_pitch(pin.exp3(eps * e) @ self._R_lin @ R_ib) - rp for e in np.eye(3)]).T / eps
+            )
+            Rk[rows, rows] = self.Rtilt * np.eye(2)
 
         K = self.P @ H.T @ np.linalg.inv(H @ self.P @ H.T + Rk)
         dx = K @ y
@@ -221,9 +249,13 @@ class LegKinematicsEkf:
         imu_quat_xyzw: np.ndarray,
         modes: list[str],
         dt: float,
+        tilt: np.ndarray | None = None,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Update the filter with the current measurements and contact modes, return the base pose and velocity."""
+        """Update the filter with the current measurements and contact modes, return the base pose and velocity.
+        tilt: base roll and pitch (roll_pitch convention) measured by the AHRS, mounting bias removed; None until
+        the bias is known."""
         q_act = np.asarray(q_act, dtype=float)
+        accel, gyro = np.asarray(accel, dtype=float), np.asarray(gyro, dtype=float)
         points = [CONTACT_MODES[m][0] for m in modes]
         s, R_ib, p_ib = self._kinematics(q_act, points)
         contact = [m != "air" for m in modes]
@@ -234,7 +266,7 @@ class LegKinematicsEkf:
             self.modes = list(modes)
             self._init(s, R_ahrs, contact)
         else:
-            self._predict(*self._imu_last, dt)
+            self._predict(0.5 * (self._imu_last[0] + accel), 0.5 * (self._imu_last[1] + gyro), dt)
             if any(contact):
                 prev = self._kinematics(q_act, [CONTACT_MODES[m][0] for m in self.modes])[0]
             for i in (0, 1):
@@ -248,9 +280,26 @@ class LegKinematicsEkf:
                     self._p_lin[i] += shift
             self.modes = list(modes)
             self._r_lin, self._v_lin, self._R_lin = self.r.copy(), self.v.copy(), self.R.copy()
-            self._correct(s, self._kinematics_cov(q_act, points, s), [i for i in (0, 1) if contact[i]], R_ahrs)
+            feet = [i for i in (0, 1) if contact[i]]
+            self._correct(s, self._kinematics_cov(q_act, points, s), feet, R_ahrs, R_ib, tilt)
 
-        self._imu_last = (np.asarray(accel, dtype=float), np.asarray(gyro, dtype=float))
+        self._imu_last = (accel, gyro)
+        return self._base(q_act, qd_act, points, R_ib, p_ib)
+
+    def reinit(
+        self, q_act: np.ndarray, qd_act: np.ndarray, R_imu: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Restart the filter from the IMU orientation R_imu (world), keeping the current contact modes; returns
+        the base pose and velocity as update() does."""
+        q_act = np.asarray(q_act, dtype=float)
+        points = [CONTACT_MODES[m][0] for m in self.modes]
+        s, R_ib, p_ib = self._kinematics(q_act, points)
+        self._init(s, R_imu, [m != "air" for m in self.modes])
+        return self._base(q_act, qd_act, points, R_ib, p_ib)
+
+    def _base(
+        self, q_act: np.ndarray, qd_act: np.ndarray, points: list[np.ndarray], R_ib: np.ndarray, p_ib: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         eps = 1e-6
         _, _, p_ib_eps = self._kinematics(q_act + eps * np.asarray(qd_act, dtype=float), points)
         p_ib_d = (p_ib_eps - p_ib) / eps  # the base moves relative to the IMU through torso pitch

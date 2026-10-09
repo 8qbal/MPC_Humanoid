@@ -171,6 +171,7 @@ class RobonionController:
         self._tilt_hist = []
         self._prepared = None
         self._since_nmpc = 0  # ticks since the NMPC last ran
+        self._deferred = False  # the last NMPC tick only prepared after a contact change
         self._v = np.zeros(len(self.ind))  # target rate of the first NMPC interval
         self.status = ControllerStatus(["flat", "flat"], None, None, None, False, None, None, self.state)
 
@@ -390,15 +391,19 @@ class RobonionController:
                 self._prepared = (now, True)
             return self.u + self._v * self.dt
 
-        if self._prepared != (now, True) and self.nmpc.X is not None:
+        deferred, self._deferred = self._deferred, False
+        if self._prepared != (now, True) and self.nmpc.X is not None and not deferred:
             # a full solve (prepare + feedback) of the whole-body NMPC does not fit one tick with the estimation:
             # prepare with the new plan now, feedback on the next tick
             self.nmpc.prepare(q, qd, self._nodes(t + self.dt, now))
             self._prepared = (now, True)
             self._since_nmpc = NMPC_EVERY - 1
+            self._deferred = True
             return self.u + self._v * self.dt
 
-        if self._prepared == (now, True):
+        # after a deferral the feedback runs even if the modes changed again (contact flicker): deferring again
+        # left the targets open loop for up to 25 ticks offline, a full solve instead went over the tick
+        if self._prepared == (now, True) or (deferred and self.nmpc.X is not None):
             u, self._v, status, solve_time = self.nmpc.feedback(q, qd, self.u, self.dt)
         else:
             u, self._v, status, solve_time = self.nmpc.solve(q, qd, self.u, self._nodes(t, now), self.dt)

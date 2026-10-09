@@ -16,6 +16,7 @@ Usage:
     uv run python scripts/run_stepping.py --viz kit                  # with the Isaac Sim window
     uv run python scripts/run_stepping.py --record run.npz           # inputs for scripts/benchmark_stepping.py
     uv run python scripts/run_stepping.py --trace trace.npz          # estimator state and simulator truth (stage 3)
+    uv run python scripts/run_stepping.py --no_arms --no_hip_yaw     # arm and hip yaw targets held at the default
 """
 
 import argparse
@@ -35,6 +36,8 @@ parser.add_argument(
     "--trace", default=None, help="save the estimator state and the simulator base truth per gait tick to this .npz"
 )
 parser.add_argument("--seed", type=int, default=0, help="env seed: the sensor-noise realization (AHRS bias, gyro)")
+parser.add_argument("--no_arms", action="store_true", help="arm targets held at the default pose (same build)")
+parser.add_argument("--no_hip_yaw", action="store_true", help="hip yaw targets held at the default pose (same build)")
 AppLauncher.add_app_launcher_args(parser)
 args = parser.parse_args()
 
@@ -75,7 +78,7 @@ def trace_row(controller: RobonionController, inputs: tuple, root_pose: np.ndarr
     """Copy of the estimator state of the tick just run, and the simulator root pose ([pos, quat xyzw]) and velocity
     ([lin, ang], world) it was measured at. The truth is for scoring only, it never reaches the controller."""
     c, st = controller, controller.status
-    roll, pitch, _, _ = c.ahrs(*inputs[:4])
+    roll, pitch, _, _, _ = c.ahrs(*inputs[:4])
     x, y, z, w = (float(v) for v in root_pose[3:])
     flags, pc = c._cfg
     base_pos, base_vel, base_R = c._ekf_base
@@ -124,7 +127,9 @@ def main() -> None:
     torso = body_names.index("upper_body_link")
 
     params = GaitParams(t_ss=args.t_ss, t_ds=args.t_ds, clearance=args.clearance, n_steps=args.steps)
-    controller = RobonionController(act_names, q_default_act, env.step_dt, params)
+    controller = RobonionController(
+        act_names, q_default_act, env.step_dt, params, arms=not args.no_arms, hip_yaw=not args.no_hip_yaw
+    )
 
     obs, _ = env.reset()
     push_t = push_end = None
@@ -233,6 +238,7 @@ def main() -> None:
             q_default_act=q_default_act,
             step_dt=env.step_dt,
             params=np.array([params.t_ss, params.t_ds, params.clearance, params.n_steps]),
+            locked=np.array([args.no_arms, args.no_hip_yaw]),
             **{k: np.array(v) for k, v in record.items()},
         )
 

@@ -23,7 +23,6 @@ import pinocchio as pin
 from .model import (
     CONTROLLER_URDF,
     JOINT_AXES,
-    MODEL_JOINTS,
     PASSIVE_COUPLING,
     RigidContactModel,
     compile_functions,
@@ -34,8 +33,8 @@ from .model import (
 
 
 class AhrsGyro:
-    """Pelvis roll/pitch (model convention R = Ry(pitch) Rx(roll), yaw removed) and their rates from the
-    AHRS quaternion, the gyro and the encoders. The IMU sits on upper_body_link, behind torso_pitch.
+    """Pelvis roll/pitch (model convention R = Rz(yaw) Ry(pitch) Rx(roll), yaw removed), their rates and the yaw rate
+    from the AHRS quaternion, the gyro and the encoders. The IMU sits on upper_body_link, behind torso_pitch.
 
     compiled: the same computation as one generated C function (Pinocchio took ~0.2 ms per tick). Its inputs are in
     sorted joint-name order, so the build does not depend on the order the caller delivers the joints in."""
@@ -90,8 +89,9 @@ class AhrsGyro:
             rot_axis((0, 1, 0), pitch) @ rot_axis((1, 0, 0), roll) @ R @ (gyro - ca.vertcat(S[2, 1], S[0, 2], S[1, 0]))
         )
         roll_d = ca.cos(pitch) * w_world[0] - ca.sin(pitch) * w_world[2]
+        yaw_d = w_world[2] + ca.sin(pitch) * roll_d
 
-        f = ca.Function("ahrs", [q_act, qd_act, quat, gyro], [ca.vertcat(roll, pitch, roll_d, w_world[1])])
+        f = ca.Function("ahrs", [q_act, qd_act, quat, gyro], [ca.vertcat(roll, pitch, roll_d, w_world[1], yaw_d)])
         return compile_functions([f], "robonion_ahrs", build)["ahrs"]
 
     def _configuration(self, q_act: np.ndarray, base_rotation: np.ndarray = np.eye(3)) -> np.ndarray:
@@ -104,11 +104,11 @@ class AhrsGyro:
 
     def __call__(
         self, q_act: np.ndarray, qd_act: np.ndarray, imu_quat_xyzw: np.ndarray, gyro: np.ndarray
-    ) -> tuple[float, float, float, float]:
-        """(roll, pitch, roll rate, pitch rate) of the pelvis."""
+    ) -> tuple[float, float, float, float, float]:
+        """(roll, pitch, roll rate, pitch rate, yaw rate) of the pelvis."""
         if self._f is not None:
             r = np.array(self._f(q_act[self._perm], qd_act[self._perm], imu_quat_xyzw, gyro)).ravel()
-            return float(r[0]), float(r[1]), float(r[2]), float(r[3])
+            return float(r[0]), float(r[1]), float(r[2]), float(r[3]), float(r[4])
 
         pin.framesForwardKinematics(self.model, self.data, self._configuration(q_act))
         R_base_imu = self.data.oMf[self._imu].rotation
@@ -127,7 +127,7 @@ class AhrsGyro:
         # w = pitch_rate e_y + roll_rate Ry(pitch) e_x (+ yaw rate, ignored)
         A = np.c_[[math.cos(pitch), 0.0, -math.sin(pitch)], [0.0, 1.0, 0.0]]
         roll_d, pitch_d = np.linalg.lstsq(A, w_world, rcond=None)[0]
-        return roll, pitch, float(roll_d), float(pitch_d)
+        return roll, pitch, float(roll_d), float(pitch_d), float(w_world[2] + math.sin(pitch) * roll_d)
 
 
 def _edge(roll: float, pitch: float, on: float) -> str | None:
@@ -193,7 +193,7 @@ class ContactModeMonitor:
         self.tilt0 = np.array(self.m.f_tilt(q_meas))
 
     def update(self, q_meas: np.ndarray, qd_meas: np.ndarray) -> tuple[list[str], list[bool]]:
-        """Kinematic update. q_meas / qd_meas: [0, 0, 0, pelvis roll, pitch, model joints] and their
+        """Kinematic update. q_meas / qd_meas: [0, 0, 0, pelvis roll, pitch, (yaw), model joints] and their
         rates. Returns the modes and which feet changed mode."""
         tilt = np.array(self.m.f_tilt(q_meas)) - self.tilt0
         rate = np.array(self.m.f_tilt_rate(q_meas, qd_meas))
@@ -255,7 +255,8 @@ class ContactModeMonitor:
         if len(contact) == 2 and not off:
             c = np.array(self.m.f_crow(q_meas, pc)).ravel()
             cref = np.asarray(cref)
-            drift = (c[5:7] - c[0:2]) - (cref[5:7] - cref[0:2])
+            nr = self.m.nr
+            drift = (c[nr : nr + 2] - c[0:2]) - (cref[nr : nr + 2] - cref[0:2])
             if np.linalg.norm(drift) > self.d_off:
                 off = [int(np.argmin(fz))]
 
@@ -270,14 +271,14 @@ class ContactModeMonitor:
 
 
 class ContactProjectionEstimator:
-    """Model state (q, qd) from encoders + AHRS roll/pitch (+ rates) under given contact modes.
+    """Model state (q, qd) from encoders + base roll/pitch/yaw (+ rates) under given contact modes.
 
     Weighted least squares onto the contact manifold, so the state always satisfies the active contact
-    rows. The base position is set only by the contacts; the AHRS roll/pitch are a weak prior that
+    rows. The base position is set only by the contacts; the measured base orientation is a weak prior that
     matters only for rotations the active contacts leave free (e.g. pitch while the soles roll on their
     toes).
 
-    compiled: the whole update as one generated C function; the KKT systems then keep all 10 contact rows
+    compiled: the whole update as one generated C function; the KKT systems then keep all contact rows
     and an inactive row reads lambda_i = 0, which gives the same solution as dropping it.
     """
 
@@ -290,7 +291,7 @@ class ContactProjectionEstimator:
         build: bool = False,
     ):
         self.m, self.iters = model, iters
-        self.w = np.r_[np.full(3, 1e-8), np.full(2, w_tilt), np.ones(len(MODEL_JOINTS))]
+        self.w = np.r_[np.full(3, 1e-8), np.full(model.nb - 3, w_tilt), np.ones(model.nj)]
         self.q: np.ndarray | None = None
         self._f = self._compile(build) if compiled else None
 
@@ -299,7 +300,8 @@ class ContactProjectionEstimator:
         crow, Jc = m.raw_sx["crow"], m.raw_sx["Jc"]
         w = ca.DM(self.w)
         base, meas, meas_d = ca.SX.sym("base", 3), ca.SX.sym("meas", n - 3), ca.SX.sym("meas_d", n - 3)
-        flags, cref, pc = ca.SX.sym("flags", 10), ca.SX.sym("cref", 10), ca.SX.sym("pc", 6)
+        nr2 = 2 * m.nr
+        flags, cref, pc = ca.SX.sym("flags", nr2), ca.SX.sym("cref", nr2), ca.SX.sym("pc", 6)
 
         def kkt(J, top, bot):
             K = ca.vertcat(ca.horzcat(ca.diag(w), (J * flags).T), ca.horzcat(J * flags, ca.diag(1 - flags)))
@@ -309,7 +311,7 @@ class ContactProjectionEstimator:
         q = qm
         for _ in range(self.iters):
             q = q + kkt(Jc(q, pc), w * (qm - q), -(crow(q, pc) - cref))
-        qd = kkt(Jc(q, pc), w * ca.vertcat(ca.DM.zeros(3), meas_d), ca.DM.zeros(10))
+        qd = kkt(Jc(q, pc), w * ca.vertcat(ca.DM.zeros(3), meas_d), ca.DM.zeros(nr2))
 
         f = ca.Function("project", [base, meas, meas_d, flags, cref, pc], [q, qd])
         return compile_functions([f], "robonion_projection", build)["project"]
@@ -336,15 +338,20 @@ class ContactProjectionEstimator:
         flags: np.ndarray,
         cref: np.ndarray,
         pc: np.ndarray,
+        yaw: float = 0.0,
+        yaw_d: float = 0.0,
     ) -> tuple[np.ndarray, np.ndarray]:
+        """yaw, yaw_d: base yaw and its rate, used by a model with yaw."""
         a = np.asarray(flags) > 0.5
-        qm = np.r_[0.0, 0.0, 0.0, roll, pitch, joints]
+        m = self.m
+        ori, ori_d = ([roll, pitch, yaw], [roll_d, pitch_d, yaw_d]) if m.yaw else ([roll, pitch], [roll_d, pitch_d])
+        qm = np.r_[0.0, 0.0, 0.0, ori, joints]
         if self.q is None:
             self.q = qm.copy()
-            self.q[2] = -np.array(self.m.f_crow(qm, pc)).ravel()[[2, 7]].mean()
+            self.q[2] = -np.array(m.f_crow(qm, pc)).ravel()[[2, m.nr + 2]].mean()
 
         if self._f is not None:
-            q, qd = self._f(self.q[:3], qm[3:], np.r_[roll_d, pitch_d, joints_d], flags, cref, pc)
+            q, qd = self._f(self.q[:3], qm[3:], np.r_[ori_d, joints_d], flags, cref, pc)
             self.q = np.array(q).ravel()
             return self.q, np.array(qd).ravel()
 
@@ -356,6 +363,6 @@ class ContactProjectionEstimator:
             q = q + self._kkt(J, self.w * (qm - q), -c)
 
         J = np.array(self.m.f_Jc(q, pc))[a]
-        qd = self._kkt(J, self.w * np.r_[0.0, 0.0, 0.0, roll_d, pitch_d, joints_d], np.zeros(a.sum()))
+        qd = self._kkt(J, self.w * np.r_[0.0, 0.0, 0.0, ori_d, joints_d], np.zeros(a.sum()))
         self.q = q
         return q, qd

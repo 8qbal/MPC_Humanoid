@@ -9,13 +9,15 @@ Robonion controller
 Timeline: standing at the default pose, crouch ramp (straight legs are singular and too slow for the swing),
 AHRS bias calibration with both soles flat, then the gait plan (gait.py) runs through RobonionNMPC.
 
-Every tick: AHRS/gyro -> contact modes (ContactModeMonitor) -> base position and velocity (LegKinematicsEkf) ->
-joints and tilt on the contact manifold (ContactProjectionEstimator) -> gait logic -> servo targets of the 9 model
-joints; the other actuated joints hold their defaults. The NMPC runs every NMPC_EVERY ticks, and at once when the
-contact plan of node 0 changes; on the ticks between, the targets continue at the rate of its first interval and the
-tick before the next NMPC run does the RTI preparation, so preparation and feedback never share a tick. Node 0 of
-the contact plan is the measured mode, later nodes follow the gait plan. The gait logic is a state machine (State), each rule justified by an Isaac
-failure in docs/stage2.md; within STEP:
+Every tick: AHRS/gyro -> contact modes (ContactModeMonitor) -> base position, velocity and yaw (LegKinematicsEkf)
+-> joints and tilt on the contact manifold (ContactProjectionEstimator) -> gait logic -> servo targets of the model
+joints (legs, torso, hip yaw, arms); the head holds its default. The model's yaw 0 is the heading at the end of the
+calibration. The NMPC runs every NMPC_EVERY ticks; on the ticks between, the targets continue at the rate of its
+first interval and the tick before the next NMPC run does the RTI preparation, so preparation and feedback never
+share a tick. When the contact plan of node 0 changes (or the plan is retimed), that tick only prepares with the new
+plan and the feedback follows on the next one. Node 0 of the contact plan is the measured mode, later nodes follow
+the gait plan. The gait logic is a state machine (State), each rule justified by an Isaac failure in docs/stage2.md;
+within STEP:
 
 - a foot scheduled to swing that tips onto an edge while the other sole is flat is peeling off: it is planned
   in the air and the NMPC keeps running;
@@ -35,7 +37,7 @@ import pinocchio as pin
 from .ekf import LegKinematicsEkf, roll_pitch
 from .estimator import AhrsGyro, ContactModeMonitor, ContactProjectionEstimator
 from .gait import GaitParams, GaitPlan
-from .model import EDGE_MODES, MODEL_JOINTS, RigidContactModel, contact_config
+from .model import EDGE_MODES, RigidContactModel
 from .nmpc import U_RATE_MAX, RobonionNMPC
 
 CROUCH = 0.2  # rad on front thigh and ankle pitch (negative, the LEG_CROUCH convention of robots/robonion_params.py)
@@ -64,14 +66,18 @@ CALM_DCM, CALM_SPEED, CALM_TIME = 0.01, 0.03, 0.2
 NMPC_EVERY = 2
 
 
+def _wrap(a: float) -> float:
+    return (a + math.pi) % (2 * math.pi) - math.pi
+
+
 class State(Enum):
     """
     STEP     NMPC along the gait plan.
     HOLD     a sole on an edge, both feet down: targets held, plan paused.
     RESET    as HOLD, the sole resting still on its edge: targets move to the standing posture.
-    CATCH    the stance sole on an edge, the other foot in the air: stance leg held, swing leg back to its
-             targets at lift-off, step ended (holding everything, or landing the swing foot with the NMPC, fell
-             more often in Isaac).
+    CATCH    the stance sole on an edge, the other foot in the air: stance leg and arms held, swing leg (with its
+             hip yaw) back to its targets at lift-off, step ended (holding everything, or landing the swing foot
+             with the NMPC, fell more often in Isaac).
     RECOVER  after HOLD / RESET / CATCH with both feet down: NMPC standing, plan paused, until calm.
     """
 
@@ -115,21 +121,25 @@ class RobonionController:
         dt: float,
         params: GaitParams | None = None,
         build: bool = False,
+        arms: bool = True,
+        hip_yaw: bool = True,
     ):
         """build: generate and compile the C functions and the NMPC solver (scripts/build_controller.py); otherwise
-        they are loaded and a missing build is an error."""
+        they are loaded and a missing build is an error. arms, hip_yaw: False holds those targets at the default
+        pose (same build)."""
         self.act_names = list(act_names)
         self.q_default = np.asarray(q_default_act, dtype=float).copy()
         self.q_crouch = nominal_pose(self.act_names, self.q_default)
         self.dt = dt
         self.params = params or GaitParams()
-        self.ind = [self.act_names.index(n) for n in MODEL_JOINTS]
 
         self.model = RigidContactModel(self.act_names, self.q_crouch, compiled=True, build=build)
+        self.ind = [self.act_names.index(n) for n in self.model.joints]
         self.ahrs = AhrsGyro(self.act_names, compiled=True, build=build)
         self.monitor = ContactModeMonitor(self.model, lead=MONITOR_LEAD, rate_ticks=MONITOR_TICKS)
         self.estimator = ContactProjectionEstimator(self.model, compiled=True, build=build)
         self.nmpc = RobonionNMPC(self.model, build=build)
+        self.nmpc.lock(arms=not arms, hip_yaw=not hip_yaw)
         self.ekf = LegKinematicsEkf(self.act_names, compiled=True, build=build)
 
         self.reset()
@@ -144,12 +154,13 @@ class RobonionController:
         self.estimator.reset()
         self.ekf.reset()
         self._ekf_frame = None  # (rotation, offset) from the EKF world to the model world
+        self._yaw0 = 0.0  # EKF yaw of the model world
         self._ekf_base = None
 
         self.plan: GaitPlan | None = None
         self._calib: list[np.ndarray] = []
         self._bias = self._cref = None
-        self._cfg = contact_config("flat", "flat")
+        self._cfg = self.model.contact_config("flat", "flat")
 
         self._ctrl_modes = ["flat", "flat"]
         self._lift_xy = self._u_lift = None
@@ -161,7 +172,7 @@ class RobonionController:
         self._prepared = None
         self._since_nmpc = 0  # ticks since the NMPC last ran
         self._v = np.zeros(len(self.ind))  # target rate of the first NMPC interval
-        self.status =ControllerStatus(["flat", "flat"], None, None, None, False, None, None, self.state)
+        self.status = ControllerStatus(["flat", "flat"], None, None, None, False, None, None, self.state)
 
     def step(
         self,
@@ -173,7 +184,7 @@ class RobonionController:
     ) -> np.ndarray:
         """One control tick. gyro and accel (with gravity, as the accelerometer reads it) in the IMU frame. Returns
         joint position targets for the actuated joints."""
-        roll, pitch, roll_d, pitch_d = self.ahrs(q_act, qd_act, imu_quat_xyzw, gyro)
+        roll, pitch, roll_d, pitch_d, yaw_d = self.ahrs(q_act, qd_act, imu_quat_xyzw, gyro)
         joints, joints_d = q_act[self.ind], qd_act[self.ind]
         self.t += self.dt
         # the monitor needs the AHRS bias, so the EKF sees flat/flat up to and including the tick that sets it
@@ -192,24 +203,27 @@ class RobonionController:
             self._start(q_act, qd_act, imu_quat_xyzw, roll, pitch)
 
         r, p = roll - self._bias[0], pitch - self._bias[1]
-        q_meas = np.r_[0.0, 0.0, 0.0, r, p, joints]
+        # sole tilt and heights do not depend on yaw, the foot drift test in release() does: yaw is set below
+        q_meas = np.r_[0.0, 0.0, 0.0, r, p, 0.0, joints]
 
-        modes, changed = self.monitor.update(q_meas, np.r_[0.0, 0.0, 0.0, roll_d, pitch_d, joints_d])
+        modes, changed = self.monitor.update(q_meas, np.r_[0.0, 0.0, 0.0, roll_d, pitch_d, 0.0, joints_d])
         if not starting:
             self._ekf_base = self.ekf.update(
                 q_act, qd_act, accel, gyro, imu_quat_xyzw, modes, self.dt, np.array([r, p])
             )
         # the monitor keeps the AHRS tilt its thresholds were tuned on; the projection starts from the EKF tilt
-        meas = (joints, *roll_pitch(self._ekf_base[2]), joints_d, roll_d, pitch_d)
+        R_base = self._ekf_base[2]
+        yaw = q_meas[5] = _wrap(math.atan2(R_base[1, 0], R_base[0, 0]) - self._yaw0)
+        meas = (joints, *roll_pitch(R_base), joints_d, roll_d, pitch_d, yaw, yaw_d)
         if any(changed):
-            self._cfg = contact_config(*modes)
+            self._cfg = self.model.contact_config(*modes)
             self._cref = self.model.update_refs(self._cref, self.estimator.q, self._cfg[1], changed)
         q, qd = self._estimate(meas)
 
         wrench = np.array(self.model.f_wrench(q, qd, self.u, self._cfg[0], self._cref, self._cfg[1], np.zeros(3)))
         modes, changed = self.monitor.release(wrench[2], q_meas, self._cref, self._cfg[1])
         if any(changed):
-            self._cfg = contact_config(*modes)
+            self._cfg = self.model.contact_config(*modes)
             q, qd = self._estimate(meas)
 
         tp = self.t - GAIT_START
@@ -224,22 +238,29 @@ class RobonionController:
         return self.q_des
 
     def _estimate(self, meas):
-        # contact points of the feet in contact where the EKF has them (they may slip), so the joints and tilt
-        # projected onto the contact manifold agree with the EKF base
+        # contact points of the feet in contact where the EKF has them and sole yaw as the EKF base yaw and the leg
+        # kinematics give it (they may slip), so the joints and tilt projected onto the contact manifold agree with
+        # the EKF base
         Rz, offset = self._ekf_frame
+        flags, pc = self._cfg
+        joints, roll, pitch, _, _, _, yaw, _ = meas
+        crow = np.array(self.model.f_crow(np.r_[0.0, 0.0, 0.0, roll, pitch, yaw, joints], pc)).ravel()
+        nr = self.model.nr
         for i in (0, 1):
             if self.ekf.modes[i] != "air":
-                self._cref[5 * i : 5 * i + 3] = Rz @ self.ekf.p[i] + offset
-        q, qd = self.estimator.update(*meas, self._cfg[0], self._cref, self._cfg[1])
+                self._cref[nr * i : nr * i + 3] = Rz @ self.ekf.p[i] + offset
+                self._cref[nr * i + 5] = crow[nr * i + 5]
+        q, qd = self.estimator.update(*meas[:6], flags, self._cref, pc, *meas[6:])
         pos, vel, _ = self._ekf_base
         q, qd = q.copy(), qd.copy()
         q[:3], qd[:3] = Rz @ pos + offset, Rz @ vel
         return q, qd
 
     def _align_ekf(self, q_stand: np.ndarray):
-        """EKF world -> model world: the model has no yaw, and its origin is set by the standing pose."""
+        """EKF world -> model world: the model's yaw 0 is the current heading, its origin is set by the standing
+        pose."""
         pos, _, R_base = self._ekf_base
-        yaw = math.atan2(R_base[1, 0], R_base[0, 0])
+        yaw = self._yaw0 = math.atan2(R_base[1, 0], R_base[0, 0])
         c, s = math.cos(yaw), math.sin(yaw)
         Rz = np.array([[c, s, 0.0], [-s, c, 0.0], [0.0, 0.0, 1.0]])
         self._ekf_frame = (Rz, q_stand[:3] - Rz @ pos)
@@ -250,7 +271,7 @@ class RobonionController:
         mean = np.mean(self._calib, axis=0)
         q_stand, self._cref = self.model.initial_state(mean[2:])
         self._bias = mean[:2] - q_stand[3:5]
-        self.monitor.calibrate(np.r_[0.0, 0.0, 0.0, mean[:2] - self._bias, mean[2:]])
+        self.monitor.calibrate(np.r_[0.0, 0.0, 0.0, mean[:2] - self._bias, 0.0, mean[2:]])
 
         x, y, z, w = np.asarray(imu_quat_xyzw, dtype=float) / np.linalg.norm(imu_quat_xyzw)
         R_ib = self.ekf.R.T @ self._ekf_base[2]
@@ -261,7 +282,8 @@ class RobonionController:
         self._align_ekf(q_stand)
 
         self._home = self._cref.copy()
-        feet_xy = np.array([self._cref[0:2], self._cref[5:7]])
+        nr = self.model.nr
+        feet_xy = np.array([self._cref[0:2], self._cref[nr : nr + 2]])
         self._mid = feet_xy.mean(0)
         self._lift_xy = feet_xy.copy()
         self._u_lift = [None, None]
@@ -269,7 +291,7 @@ class RobonionController:
         com = np.array(self.model.f_com(q_stand)).ravel()
         self._com0 = com[:2]
         self.plan = GaitPlan(self.params, feet_xy, com[2])
-        self.nmpc.reset(np.r_[q_stand, np.zeros(self.model.nq), self.u])
+        self.nmpc.reset(np.r_[q_stand, np.zeros(self.model.nq), self.u[: self.nmpc.ns]])
 
     # gait logic -------------------------------------------------------------------------------------------------
 
@@ -320,7 +342,7 @@ class RobonionController:
 
         self._hold_since = None
         if self.state in HELD:
-            self.nmpc.reset(np.r_[q, qd, self.u])
+            self.nmpc.reset(np.r_[q, qd, self.u[: self.nmpc.ns]])
             self._prepared = None
             self.state = State.STEP if air else State.RECOVER
             self._calm = 0.0
@@ -352,7 +374,9 @@ class RobonionController:
         if plan.phases[ph_i].swing == i and t < plan.phases[ph_i].t1:
             plan.stretch(ph_i, t - plan.phases[ph_i].t1)
 
-        leg = slice(4 * i, 4 * i + 4)
+        leg = [*range(4 * i, 4 * i + 4)]
+        if self.model.hip_yaw:
+            leg.append(self.model.joints.index(("left_hip_yaw_joint", "right_hip_yaw_joint")[i]))
         u = u.copy()
         u[leg] += np.clip(self._u_lift[i][leg] - u[leg], -U_RATE_MAX * self.dt, U_RATE_MAX * self.dt)
         return u
@@ -366,11 +390,18 @@ class RobonionController:
                 self._prepared = (now, True)
             return self.u + self._v * self.dt
 
+        if self._prepared != (now, True) and self.nmpc.X is not None:
+            # a full solve (prepare + feedback) of the whole-body NMPC does not fit one tick with the estimation:
+            # prepare with the new plan now, feedback on the next tick
+            self.nmpc.prepare(q, qd, self._nodes(t + self.dt, now))
+            self._prepared = (now, True)
+            self._since_nmpc = NMPC_EVERY - 1
+            return self.u + self._v * self.dt
+
         if self._prepared == (now, True):
-            u, status, solve_time = self.nmpc.feedback(q, qd, self.u, self.dt)
+            u, self._v, status, solve_time = self.nmpc.feedback(q, qd, self.u, self.dt)
         else:
-            u, status, solve_time = self.nmpc.solve(q, qd, self.u, self._nodes(t, now), self.dt)
-        self._v = (u - self.u) / self.dt
+            u, self._v, status, solve_time = self.nmpc.solve(q, qd, self.u, self._nodes(t, now), self.dt)
         self._since_nmpc = 0
         self._prepared = (now, False)
         if NMPC_EVERY == 1:
@@ -417,13 +448,13 @@ class RobonionController:
 
     def _nodes(self, t, now):
         """NMPC plan: per node the modes, contact references, DCM / CoM velocity and swing-sole targets."""
-        nodes = []
+        nodes, nr = [], self.model.nr
         for tk in t + self.nmpc.t_nodes:
             r = self.plan.reference(tk)
             cref = np.array(self._cref, dtype=float)
             for i in (0, 1):
                 if now[i] == "air":
-                    cref[5 * i : 5 * i + 5] = self._home[5 * i : 5 * i + 5]
+                    cref[nr * i : nr * (i + 1)] = self._home[nr * i : nr * (i + 1)]
 
             foot, z, _ = self.plan.swing(tk)
             sole = np.zeros((3, 2))

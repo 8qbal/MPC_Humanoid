@@ -14,10 +14,10 @@ Every tick: AHRS/gyro -> contact modes (ContactModeMonitor) -> base position, ve
 joints (legs, torso, hip yaw, arms); the head holds its default. The model's yaw 0 is the heading at the end of the
 calibration. The NMPC runs every NMPC_EVERY ticks; on the ticks between, the targets continue at the rate of its
 first interval and the tick before the next NMPC run does the RTI preparation, so preparation and feedback never
-share a tick. When the contact plan of node 0 changes (or the plan is retimed), that tick only prepares with the new
-plan and the feedback follows on the next one. Node 0 of the contact plan is the measured mode, later nodes follow
-the gait plan. The gait logic is a state machine (State), each rule justified by an Isaac failure in docs/stage2.md;
-within STEP:
+share a tick. When the contact plan of node 0 changes (or the plan is retimed, or the NMPC restarts after a hold),
+that tick only prepares with the new plan and the feedback follows on the next one. Node 0 of the contact plan is the
+measured mode, later nodes follow the gait plan. The gait logic is a state machine (State), each rule justified by an
+Isaac failure in docs/stage2.md; within STEP:
 
 - a foot scheduled to swing that tips onto an edge while the other sole is flat is peeling off: it is planned
   in the air and the NMPC keeps running;
@@ -344,6 +344,7 @@ class RobonionController:
         self._hold_since = None
         if self.state in HELD:
             self.nmpc.reset(np.r_[q, qd, self.u[: self.nmpc.ns]])
+            self._v = np.zeros_like(self._v)
             self._prepared = None
             self.state = State.STEP if air else State.RECOVER
             self._calm = 0.0
@@ -392,9 +393,9 @@ class RobonionController:
             return self.u + self._v * self.dt
 
         deferred, self._deferred = self._deferred, False
-        if self._prepared != (now, True) and self.nmpc.X is not None and not deferred:
+        if self._prepared != (now, True) and not deferred:
             # a full solve (prepare + feedback) of the whole-body NMPC does not fit one tick with the estimation:
-            # prepare with the new plan now, feedback on the next tick
+            # prepare with the new plan now, feedback on the next tick (also the cold restart after a hold, ~8 ms)
             self.nmpc.prepare(q, qd, self._nodes(t + self.dt, now))
             self._prepared = (now, True)
             self._since_nmpc = NMPC_EVERY - 1
@@ -403,10 +404,7 @@ class RobonionController:
 
         # after a deferral the feedback runs even if the modes changed again (contact flicker): deferring again
         # left the targets open loop for up to 25 ticks offline, a full solve instead went over the tick
-        if self._prepared == (now, True) or (deferred and self.nmpc.X is not None):
-            u, self._v, status, solve_time = self.nmpc.feedback(q, qd, self.u, self.dt)
-        else:
-            u, self._v, status, solve_time = self.nmpc.solve(q, qd, self.u, self._nodes(t, now), self.dt)
+        u, self._v, status, solve_time = self.nmpc.feedback(q, qd, self.u, self.dt)
         self._since_nmpc = 0
         self._prepared = (now, False)
         if NMPC_EVERY == 1:

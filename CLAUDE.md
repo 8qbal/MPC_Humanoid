@@ -146,24 +146,40 @@ retired: straight-leg standing only needs the servos to hold the pose,
 and every active mode (balancing, stepping) runs at the crouched pose. Its code is at git tag
 `stage2`; its results stay in `docs/stage1.md` as a record.
 
-**Project state (stage 2 closed by the user on 2026-09-26; stage 3 set on 2026-10-04).** Stage 3
-is base position estimation. The supervisor rejected the stage-2 base x, y, z:
-`ContactProjectionEstimator` pins the contact points (`cref`) in the world, so any foot slip
-becomes a permanent position error, and slip cannot be measured. Proposed replacement: the
-leg-kinematics + IMU EKF of Bloesch et al. 2012 (RSS). The proposal and its offline validation
-(record a stepping run, replay the filter in `outputs/stage3_prototypes/`, drift of x, y, z
-against the simulator truth in the world frame) are in `docs/PLAN.md`, *Stage 3*. Not started;
-the controller keeps the stage-2 estimator until the results are in. The user dropped the
-Jetson AGX Orin tick benchmark (the Jetson is assumed to keep up). After stage 3: a hardware
-check of the contact-mode monitor and the estimator (standing, slow stepping), whose
-thresholds (0.2 deg, 15 ms lead, 2 ticks) were tuned in Isaac only; then stage 4, footstep
-adaptation. Known issues, all listed under *Open* in `docs/stage2.md`:
-- Tick 4.2-4.3 ms mean / 4.6-4.8 ms p95 on the desktop, 2 % of ticks over 5 ms; Jetson not benchmarked.
+**Project state (stage 2 closed by the user on 2026-09-26; stage 3 set on 2026-10-04, widened
+2026-10-07 and 2026-10-09).** Stage 3 is base position estimation, the whole body in the NMPC, and
+walking. Working notes and every result: `docs/stage3.md` (local, git-ignored); the summary is in
+`docs/PLAN.md`, *Stage 3*. Branch `feat/movement-gait`.
+- Estimation:
+  - The supervisor rejected the stage-2 base x, y, z: `ContactProjectionEstimator` pins the contact
+    points (`cref`) in the world, so any foot slip becomes a permanent position error.
+  - The controller now takes base x, y, z and velocity from the leg-kinematics + IMU EKF of
+    Bloesch et al. 2012 (`ekf.py`).
+- Tick time: the NMPC runs every second tick (`NMPC_EVERY = 2`, 100 Hz).
+  - The tick stays 5 ms. Estimation, monitor and gait rules stay at 200 Hz: the user kept all the
+    5 ms tuning.
+  - A plain 10 ms tick is the fallback only if the whole-body NMPC does not fit.
+  - 50 Hz was tried and rejected (falls, slip).
+- Whole body: pelvis yaw, hip yaw and the 8 arm joints, for balance and yaw damping.
+  - Session a3 builds it as an offline prototype on branch `feat/arms-yaw`. It is not in the package yet.
+  - Choices so far: arm targets as NMPC inputs, 1 IRK stage, a ground yaw-moment cost.
+  - The tick does not fit 5 ms yet.
+- Walking: straight walking at a commanded speed with an ALIP footstep planner (user decision
+  2026-10-09). Designed in `docs/stage3.md`, not started; it comes after the whole-body port.
+- The user dropped the Jetson AGX Orin tick benchmark (the Jetson is assumed to keep up).
+- Later:
+  - a hardware check of the contact-mode monitor and the estimator, whose thresholds (0.2 deg,
+    15 ms lead, 2 ticks) were tuned in Isaac only;
+  - stage 4: fast walking and turning.
+
+Known issues from stage 2, listed under *Open* in `docs/stage2.md`:
+- Stage-2 tick: 4.2-4.3 ms mean / 4.6-4.8 ms p95 on the desktop. With the 100 Hz NMPC and the
+  compiled EKF: 2.34 / 2.96 ms (offline replay).
 - Backward pushes while stepping: −x 1.75 N·s survived in 2 of 3 seeds, −x 2.0 falls. Both
   passed with 4 PhysX velocity iterations; the drop comes from the simulator fix (0
   iterations), not the controller, and was accepted by the user.
 - After a push the gait holds the targets and waits (up to 3.6 s), no active recovery;
-  lateral pushes beyond ±0.5 / +1.0 N·s need step placement (stage 4).
+  lateral pushes beyond ±0.5 / +1.0 N·s need step placement (ALIP, stage 3).
 - Landing drift ~0.3 mm per step (needs pelvis yaw in the model); ground-height error
   beyond ±5 mm falls.
 - All results come from Isaac only; limits within one push step are not precise.
@@ -181,6 +197,10 @@ adaptation. Known issues, all listed under *Open* in `docs/stage2.md`:
   tilt rate, sole height and the model-predicted normal force; there is no contact
   sensing), `ContactProjectionEstimator` (state on the contact manifold). `compiled=True`
   (used by `controller.py`) runs `RigidContactModel`, `AhrsGyro` and the estimator as generated C.
+- `ekf.py`: `LegKinematicsEkf` (Bloesch et al. 2012): base position, velocity and orientation, and one
+  contact point per sole. Its inputs are the IMU, the leg kinematics, the AHRS tilt and the monitor's
+  contact modes. `compiled=True` (used by `controller.py`) generates the leg kinematics and their
+  Jacobian as C (`robonion_ekf_<hash>.so`).
 - `nmpc.py`: `RobonionNMPC`, acados SQP-RTI NMPC, outputs servo targets. The caller passes the
   plan per node (contact modes, DCM / CoM-velocity and swing-sole references); edge modes are
   never planned. Per-node references and gates are parameters, compiled contact algebra, RTI
@@ -200,7 +220,9 @@ adaptation. Known issues, all listed under *Open* in `docs/stage2.md`:
   (`MONITOR_LEAD` 15 ms: tilt + lead · rate beyond 0.2°) on 2 consecutive ticks
   (`MONITOR_TICKS`; a touchdown impact reads 12-19 deg/s for one tick). The asset runs with 0
   PhysX TGS velocity iterations (`robonionv2.py`): with 4, a flat sole read up to 3.6 deg/s of
-  false tilt rate.
+  false tilt rate. `NMPC_EVERY = 2`: feedback on every second tick, RTI preparation on the tick
+  between. Targets between the two follow u + v·dt. A full solve runs right away when node 0's
+  contact modes change or the plan is retimed.
 - Build: `scripts/build_controller.py` (no Isaac) generates and compiles the C functions, the
   contact algebra (`alg.so`) and the acados solver into `outputs/acados/`; runtime
   (`run_stepping.py`, `benchmark_stepping.py`) only loads them and raises `FileNotFoundError`
@@ -225,13 +247,17 @@ adaptation. Known issues, all listed under *Open* in `docs/stage2.md`:
   The prototypes in both folders import the package modules as they were before the rename to
   `nmpc.py` / `controller.py` / `robonion_params.py`, so they only run with the package at git
   tag `stage2` (check that tag out first).
-- Open: a stepping tick costs 4.2-4.3 ms mean / 4.6-4.8 ms p95 in Isaac on the desktop (compiled
-  estimation + NMPC), near the 5 ms budget; the real robot runs on a Jetson AGX Orin (not
-  measured, benchmark dropped by the user; if needed: `scripts/run_stepping.py --record run.npz` on the desktop, then
-  `scripts/build_controller.py` and `scripts/benchmark_stepping.py run.npz` on the Jetson, no
-  Isaac needed). Lateral push
-  recovery while stepping needs footstep adaptation (stage 4). Landing drift ~0.3 mm per step
-  needs pelvis yaw in the model (walking / turning stage).
+- Open:
+  - Tick: 2.8-2.9 ms mean / 3.5-3.9 ms p95 in Isaac on the desktop with the 100 Hz NMPC.
+    - +x 1.75 N·s got worse with it (28-53 mm slip, QP failures in one seed); not investigated.
+    - The real robot runs on a Jetson AGX Orin (not measured, benchmark dropped by the user). If
+      needed: `scripts/run_stepping.py --record run.npz` on the desktop, then
+      `scripts/build_controller.py` and `scripts/benchmark_stepping.py run.npz` on the Jetson, no
+      Isaac needed.
+  - Lateral push recovery while stepping needs footstep placement (ALIP, stage 3).
+  - Landing drift ~0.3 mm per step needs pelvis yaw in the model (a3's whole-body work).
+- The laptop is shared with other projects: run Isaac and other heavy jobs under
+  `flock /tmp/laptop_heavy.lock <command>` (agreed with `slam_project`, 15 GB RAM).
 
 ## The URDF → USD pipeline (assets/robonionv2.usd)
 

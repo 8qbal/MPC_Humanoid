@@ -10,7 +10,7 @@ The controller must respect the robot's floating base, contact forces, actuator 
 
 Target: fast (0.3--0.4 m/s), reasonably natural walking that stays stable under pushes, with MPC as the only control law (no RL).  Servos run in Dynamixel position mode (mode 3), so the controller outputs joint position targets.  The robot has no foot force/contact sensors, in hardware or in simulation.
 
-The core controller is an NMPC on a rigid-contact floating-base model, re-solved every control tick (200 Hz) from the estimated state; it outputs the servo targets directly (record of how it was chosen: [`docs/stage1.md`](stage1.md)):
+The core controller is an NMPC on a rigid-contact floating-base model, re-solved from the estimated state every control tick (200 Hz) until stage 2 and every second tick (100 Hz) since stage 3; it outputs the servo targets directly (record of how it was chosen: [`docs/stage1.md`](stage1.md)):
 
 ```text
 encoders + AHRS + gyro -> contact mode per foot (no contact sensing) -> floating-base state
@@ -44,9 +44,12 @@ Stages, each built on the previous one:
 
 1. **Stabilizer** -- double-support standing that recovers from pushes without stepping (ZMP moved inside the hull of both soles).
 2. **Stepping in place** -- gait scheduler, single support, alternating support polygon, swing-foot spline.
-3. **Base position estimation** -- base x, y, z from an EKF fusing IMU and leg kinematics (Bloesch et al. 2012) instead of pinning the feet in contact.
-4. **Fast walking without arm swing** -- footstep position and step timing as MPC decision variables, 0.3--0.4 m/s.
-5. **Fast walking** -- add counter-phase arm swing and other naturalness tuning.
+3. **Base position estimation, whole body, walking**:
+   - base x, y, z from an EKF fusing IMU and leg kinematics (Bloesch et al. 2012) instead of pinning the feet in contact;
+   - pelvis yaw, hip yaw and the 8 arm joints in the NMPC, for balance and yaw damping (added 2026-10-07);
+   - straight walking at a commanded speed, with footsteps from an ALIP footstep planner (added 2026-10-09).
+4. **Fast walking** -- 0.3--0.4 m/s and turning. Whether footsteps and step timing also become MPC decision variables is not decided yet.
+5. **Naturalness tuning**.
 6. *Maybe:* **stochastic MPC** -- chance-constrained or tube MPC on top of the same QP for noise and disturbance robustness.
 
 Success metrics: maximum recoverable push impulse (N·s) per direction, velocity RMSE, falls per 100 pushes, no servo hitting its velocity limit.
@@ -66,7 +69,24 @@ Never worse than the passive robot, better in two to three cases; larger pushes 
 
 Full record: [`docs/stage2.md`](stage2.md).  One layer: the rigid-contact NMPC with a contact plan from a gait scheduler (T_ss 0.3 s, T_ds 0.1 s, 2 cm clearance, 0.2 rad crouch), a closed-form DCM reference and a swing spline as cost references (`mpc/gait.py`, `mpc/nmpc.py` `RobonionNMPC`, `mpc/controller.py` `RobonionController`, built by `scripts/build_controller.py`, run by `scripts/run_stepping.py`).  In Isaac, with the estimator only: 20 steps at 2 and 3 cm without a fall; early and late touchdowns retime the plan (±5 mm of ground-height error handled); one tick ≈ 4.3 ms on the desktop (compiled contact algebra and estimation, split RTI, 16 nodes), measurement-to-target latency ≈ 1.3 ms.  Pushes in the middle of single support (3 noise seeds): stepping resumes after +1.75 / −1.0 N·s sagittal (−1.75 in 2 of 3) and ±0.5 / +1.0 N·s lateral; lateral push recovery needs footstep adaptation (stage 4).  Open: Jetson timing, hardware check of the contact-mode monitor, ≈ 0.3 mm forward landing drift per step.
 
-### Stage 3: base position estimation (proposed 2026-10-04, not started)
+### Stage 3: base position estimation, whole body, walking (set 2026-10-04, widened 2026-10-07 and 2026-10-09; in progress)
+
+Working notes and every result: `docs/stage3.md` (local, git-ignored).  State on 2026-10-09:
+- **EKF:** in the controller (`mpc/ekf.py`, `LegKinematicsEkf`). Its leg kinematics are compiled with CasADi.
+- **Tick time:** the NMPC runs every second tick (100 Hz). The tick stays 5 ms, and estimation, contact monitor and gait rules stay at 200 Hz. Offline tick: 2.34 ms mean / 2.96 ms p95. 50 Hz was tried and rejected (falls, slip).
+- **Whole body:** pelvis yaw, hip yaw and the 8 arm joints are an offline prototype on branch `feat/arms-yaw`, not in the package yet.
+  - Arm targets are NMPC inputs, with 1 IRK stage. A ground yaw-moment cost lets the arms absorb yaw.
+  - The tick does not fit 5 ms yet.
+  - A sagittal push saturates the hip-yaw servo.
+- **Walking with ALIP:** designed, not started. It comes after the whole-body port.
+
+**Walking with the ALIP footstep planner** (Gong & Grizzle 2022, from ARTEMIS, see below):
+- Straight walking at a commanded speed, with start and stop.
+- ALIP places every footstep from the estimated CoM state and the angular momentum about the stance contact point. Its footsteps enter `RobonionNMPC` as contact plan and swing-sole references.
+- Mostly `mpc/gait.py` (footholds, swing xy trajectory, replanning) and `mpc/controller.py`. `mpc/nmpc.py` should stay as it is.
+- The step length is limited by the 4.08 rad/s servos and the servo-target range. It is measured offline first, and the commanded speed is set from it.
+
+The EKF design as proposed on 2026-10-04:
 
 The stage-2 estimator (`ContactProjectionEstimator`) takes the base x, y, z from the contacts alone: the contact points of the feet in contact are pinned in the world (`cref`), so any foot slip becomes a permanent position error, and the robot cannot measure slip (no contact sensing).  The supervisor rejected it for this drift.  The accelerometer is in the env observations but unused.
 
@@ -95,11 +115,11 @@ Validation, offline first; the controller keeps the stage-2 estimator until the 
 2. EKF prototype in `outputs/stage3_prototypes/`, replaying the record without Isaac (valid open loop, since the filter only observes).
 3. Drift of x, y, z against the truth in the world frame and against the stage-2 estimator, error inside 3σ, seeds 0, 1, 2 and one push.  Stepping in place travels no distance, so drift is reported in metres over the run length.
 
-### Footstep-adaptation candidates from ARTEMIS (stage 4, not decided)
+### Footstep-adaptation candidates from ARTEMIS (ALIP taken into stage 3 on 2026-10-09)
 
 ARTEMIS (Zhu, Ahn, Hong, UCLA RoMeLa; [paper](https://artemis.romela.org/static/pdfs/artemis_final.pdf)) walks at up to 2.1 m/s with an InEKF, an ALIP footstep planner, a QP trajectory planner and a torque-level whole-body QP at 500 Hz.  Its whole-body controller and estimator rely on hardware Robonion does not have (low-gear proprioceptive actuators commanded by feedforward torque, foot contact sensors, 23–30 rad/s joints), so they are not taken over; the NMPC on position-mode servos stays.  Parts that do not depend on that hardware and fit stage 4:
 
-1. **ALIP footstep planner** (Gong & Grizzle 2022, ARTEMIS ref. [40]): places the next footstep from the CoM state and the angular momentum about the contact point, so that the angular momentum at the end of the next step reaches a desired value.  Needs only the estimated state; its footsteps would enter `RobonionNMPC` as contact plan and swing-sole references.  An alternative to making footsteps NMPC decision variables (stage 4 above); targets the lateral push limit of stage 2 (±0.5 / +1.0 N·s).
+1. **ALIP footstep planner** (Gong & Grizzle 2022, ARTEMIS ref. [40]): places the next footstep from the CoM state and the angular momentum about the contact point, so that the angular momentum at the end of the next step reaches a desired value.  Needs only the estimated state; its footsteps would enter `RobonionNMPC` as contact plan and swing-sole references.  An alternative to making footsteps NMPC decision variables (stage 4 above); targets the lateral push limit of stage 2 (±0.5 / +1.0 N·s).  Taken into stage 3 for walking (user decision 2026-10-09).
 2. **Event-based step timing**: a step ends on touchdown rather than on a fixed schedule, and the gait is parametrised by swing time and lift-off percentage (LOP, the point in the swing phase at which the stance foot may lift).  The stage-2 retiming rules already end single support on early / late touchdown; this would make it the gait's definition.  LOP below 100 % (flight phases, running) is out of reach for the 4.08 rad/s servos.
 
 ### LIPM/DCM MPC + IK analysis (historical)

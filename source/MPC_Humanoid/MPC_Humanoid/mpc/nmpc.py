@@ -276,13 +276,19 @@ class RobonionNMPC:
             "hpipm_mode": "SPEED_ABS",
             "qp_solver_warm_start": 1,
             "qp_solver_iter_max": 100,
+            # 1e-4 instead of the defaults: 3.9 instead of 6.1 HPIPM iterations per feedback, Isaac push table checked
+            # (dual warm start, qp_solver_warm_start 2, took more iterations)
+            "qp_solver_tol_stat": 1e-4,
+            "qp_solver_tol_eq": 1e-4,
+            "qp_solver_tol_ineq": 1e-4,
+            "qp_solver_tol_comp": 1e-4,
             "hessian_approx": "GAUSS_NEWTON",
             # Radau IIA, one step per node: 2 stages matched RK4 at 1 ms within 0.005 mm of CoM over the horizon
-            # (stage 2); 1 stage (implicit Euler, still stable for the -600 1/s mode of a foot in the air) for the
-            # whole-body tick (docs/stage3.md, decision of 2026-10-09)
+            # (stage 2). 1 stage everywhere fit the whole-body tick but rolled the soles onto edges in Isaac; 2 on the
+            # first 4 intervals still did with the deferred switch, on the first 8 it steps as cleanly as stage 2
             "integrator_type": "IRK",
             "collocation_type": "GAUSS_RADAU_IIA",
-            "sim_method_num_stages": 1,
+            "sim_method_num_stages": np.r_[[2] * 8, [1] * 8],
             "sim_method_num_steps": 1,
             "sim_method_newton_iter": 1,
             "sim_method_jac_reuse": 1,

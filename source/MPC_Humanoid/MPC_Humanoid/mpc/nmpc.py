@@ -276,12 +276,12 @@ class RobonionNMPC:
             "hpipm_mode": "SPEED_ABS",
             "qp_solver_warm_start": 1,
             "qp_solver_iter_max": 100,
-            # 1e-4 instead of the defaults: 3.9 instead of 6.1 HPIPM iterations per feedback, Isaac push table checked
-            # (dual warm start, qp_solver_warm_start 2, took more iterations)
-            "qp_solver_tol_stat": 1e-4,
-            "qp_solver_tol_eq": 1e-4,
-            "qp_solver_tol_ineq": 1e-4,
-            "qp_solver_tol_comp": 1e-4,
+            # 1e-5 instead of the defaults: 4.7 instead of 6.1 HPIPM iterations per feedback; 1e-4 (3.9) started holds
+            # after -x 1.0 pushes in Isaac (dual warm start, qp_solver_warm_start 2, took more iterations)
+            "qp_solver_tol_stat": 1e-5,
+            "qp_solver_tol_eq": 1e-5,
+            "qp_solver_tol_ineq": 1e-5,
+            "qp_solver_tol_comp": 1e-5,
             "hessian_approx": "GAUSS_NEWTON",
             # Radau IIA, one step per node: 2 stages matched RK4 at 1 ms within 0.005 mm of CoM over the horizon
             # (stage 2). 1 stage everywhere fit the whole-body tick but rolled the soles onto edges in Isaac; 2 on the

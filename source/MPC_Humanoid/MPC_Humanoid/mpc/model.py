@@ -6,16 +6,18 @@
 """
 Rigid-contact model of Robonion for the NMPC.
 
+q = [base x, y, z, roll, pitch, (yaw), MODEL_JOINTS, (HIP_YAW_JOINTS), (ARM_JOINTS)], base rotation
+Rz(yaw) Ry(pitch) Rx(roll). With yaw, hip_yaw and arms off this is the stage-2 model:
 q = [base x, y, z, roll, pitch, L hip_roll, L front_thigh, L ankle_pitch, L ankle_roll,
      R hip_roll, R front_thigh, R ankle_pitch, R ankle_roll, torso_pitch]   (14)
 
-Base yaw, hip yaw, arms and head stay at their defaults; the passive parallelogram joints follow
-PASSIVE_COUPLING. The mass matrix is frozen at the standing pose; gravity, contact kinematics and
-servo torques are exact. Each sole has 5 contact rows: position of a contact point (3), z of the
-sole y axis (roll) and z of the sole x axis (pitch). The contact point and a flag per row select the
-contact mode of each foot (flat, rolling on an edge, in the air): an active row is a
-Baumgarte-stabilised acceleration constraint, an inactive row has lambda_i = 0. The position-mode
-servos leave the contact wrench no freedom, so it is eliminated in closed form, lambda(q, qd, u).
+Joints not in the model (head, and hip yaw / arms when off) stay at their defaults; the passive parallelogram joints
+follow PASSIVE_COUPLING. The mass matrix is frozen at the standing pose; gravity, contact kinematics and servo
+torques are exact. Each sole has 5 or 6 contact rows: position of a contact point (3), z of the sole y axis (roll),
+z of the sole x axis (pitch) and, with yaw, y of the sole x axis (yaw). The contact point and a flag per row select
+the contact mode of each foot (flat, rolling on an edge, in the air): an active row is a Baumgarte-stabilised
+acceleration constraint, an inactive row has lambda_i = 0. The position-mode servos leave the contact wrench no
+freedom, so it is eliminated in closed form, lambda(q, qd, u).
 """
 
 from __future__ import annotations
@@ -52,6 +54,12 @@ MODEL_JOINTS = [
     for side in ("left", "right")
     for joint in ("hip_roll_joint", "front_thigh_pitch_joint", "ankle_pitch_joint", "ankle_roll_joint")
 ] + ["torso_pitch_joint"]
+HIP_YAW_JOINTS = ["left_hip_yaw_joint", "right_hip_yaw_joint"]
+ARM_JOINTS = [
+    f"{side}_{joint}"
+    for side in ("left", "right")
+    for joint in ("shoulder_pitch_joint", "shoulder_roll_joint", "elbow_yaw_joint", "elbow_pitch_joint")
+]
 
 # Sole corners in *_foot_roll_link, from the foot mesh *_foot_visual.stl: +0.068 / -0.107 m along x
 # from the ankle-roll axis, +-0.0335 m along y, 0.056 m below the axis (flat rectangular sole).
@@ -60,22 +68,26 @@ SOLE_CENTRE = SOLE_CORNERS.mean(0)
 SOLE_HALF_LENGTH = 0.0875
 SOLE_HALF_WIDTH = 0.0335
 
-# per foot: contact point in *_foot_roll_link, flags for [x, y, z, roll row, pitch row]
+# per foot: contact point in *_foot_roll_link, flags for [x, y, z, roll row, pitch row, yaw row]; a sole rolling
+# on an edge still resists yaw
 CONTACT_MODES = {
-    "flat": (SOLE_CENTRE, (1, 1, 1, 1, 1)),
-    "toe": (np.r_[SOLE_CORNERS[:, 0].max(), 0.0, SOLE_CENTRE[2]], (1, 1, 1, 1, 0)),
-    "heel": (np.r_[SOLE_CORNERS[:, 0].min(), 0.0, SOLE_CENTRE[2]], (1, 1, 1, 1, 0)),
-    "left_edge": (SOLE_CENTRE + [0, SOLE_HALF_WIDTH, 0], (1, 1, 1, 0, 1)),
-    "right_edge": (SOLE_CENTRE - [0, SOLE_HALF_WIDTH, 0], (1, 1, 1, 0, 1)),
-    "air": (SOLE_CENTRE, (0, 0, 0, 0, 0)),
+    "flat": (SOLE_CENTRE, (1, 1, 1, 1, 1, 1)),
+    "toe": (np.r_[SOLE_CORNERS[:, 0].max(), 0.0, SOLE_CENTRE[2]], (1, 1, 1, 1, 0, 1)),
+    "heel": (np.r_[SOLE_CORNERS[:, 0].min(), 0.0, SOLE_CENTRE[2]], (1, 1, 1, 1, 0, 1)),
+    "left_edge": (SOLE_CENTRE + [0, SOLE_HALF_WIDTH, 0], (1, 1, 1, 0, 1, 1)),
+    "right_edge": (SOLE_CENTRE - [0, SOLE_HALF_WIDTH, 0], (1, 1, 1, 0, 1, 1)),
+    "air": (SOLE_CENTRE, (0, 0, 0, 0, 0, 0)),
 }
 EDGE_MODES = ("toe", "heel", "left_edge", "right_edge")
 
 
-def _effort(joint: str) -> float:
-    if joint == "torso_pitch_joint":
-        return URDF_LIMITS["torso_arms"][0]
-    return URDF_LIMITS["legs"][0]
+def _limits(joint: str) -> tuple[float, float]:
+    """(effort, velocity) limits of a model joint."""
+    if joint.endswith(("hip_yaw_joint", "elbow_yaw_joint")):
+        return URDF_LIMITS["yaw"]
+    if joint == "torso_pitch_joint" or joint in ARM_JOINTS:
+        return URDF_LIMITS["torso_arms"]
+    return URDF_LIMITS["legs"]
 
 
 def rot_axis(axis, angle):
@@ -88,19 +100,6 @@ def rot_axis(axis, angle):
         ca.horzcat(y * x * C + z * s, c + y * y * C, y * z * C - x * s),
         ca.horzcat(z * x * C - y * s, z * y * C + x * s, c + z * z * C),
     )
-
-
-def contact_config(mode_left: str, mode_right: str) -> tuple[np.ndarray, np.ndarray]:
-    """Row flags (10) and contact points (6) for a pair of foot modes.
-
-    Sole pitch equals pelvis pitch through the leg parallelograms, so two active pitch rows are
-    identical; the right one is then switched off and the left one carries the summed pitch moment.
-    """
-    (pl, fl), (pr, fr) = CONTACT_MODES[mode_left], CONTACT_MODES[mode_right]
-    flags = np.r_[fl, fr].astype(float)
-    if flags[4] and flags[9]:
-        flags[9] = 0.0
-    return flags, np.r_[pl, pr]
 
 
 def landing_mode(roll: float, pitch: float, tilt_on: float) -> str:
@@ -147,7 +146,7 @@ def compile_functions(functions: list[ca.Function], prefix: str, build: bool = F
 
 
 class RigidContactModel:
-    """Floating base + 9 independent joints with rigid sole contacts; see the module docstring."""
+    """Floating base + model joints with rigid sole contacts; see the module docstring."""
 
     def __init__(
         self,
@@ -156,9 +155,21 @@ class RigidContactModel:
         alpha: float = 20.0,
         compiled: bool = False,
         build: bool = False,
+        yaw: bool = True,
+        hip_yaw: bool = True,
+        arms: bool = True,
     ):
         """compiled: the f_* are generated C (one shared library) instead of the CasADi VM; symbolic users
-        (the NMPC) take the CasADi functions from raw_sx. build: see compile_functions."""
+        (the NMPC) take the CasADi functions from raw_sx. build: see compile_functions. yaw, hip_yaw, arms: pelvis
+        yaw (with a yaw row per sole), the hip yaw joints and the 8 arm joints as model coordinates."""
+        self.yaw, self.hip_yaw, self.arms = yaw, hip_yaw, arms
+        nb = self.nb = 6 if yaw else 5
+        nr = self.nr = 6 if yaw else 5
+        joints = self.joints = MODEL_JOINTS + (HIP_YAW_JOINTS if hip_yaw else []) + (ARM_JOINTS if arms else [])
+        self.n_legs = len(MODEL_JOINTS) + (len(HIP_YAW_JOINTS) if hip_yaw else 0)
+        nj = self.nj = len(joints)
+        nq = self.nq = nb + nj
+
         m = pin.buildModelFromUrdf(CONTROLLER_URDF, pin.JointModelFreeFlyer())
         act_names = list(act_names)
         qn = pin.neutral(m)
@@ -170,9 +181,7 @@ class RigidContactModel:
                     g * qn[m.joints[m.getJointId(f"{side}_{a}")].idx_q]
                 )
 
-        nj = len(MODEL_JOINTS)
-        nq = self.nq = 5 + nj
-        jmap = {n: (5 + i, 1.0) for i, n in enumerate(MODEL_JOINTS)}
+        jmap = {n: (nb + i, 1.0) for i, n in enumerate(joints)}
         for side in ("left", "right"):
             for passive, (a, g) in PASSIVE_COUPLING.items():
                 jmap[f"{side}_{passive}"] = (jmap[f"{side}_{a}"][0], g)
@@ -180,12 +189,15 @@ class RigidContactModel:
         q = ca.SX.sym("q", nq)
         qd = ca.SX.sym("qd", nq)
         u = ca.SX.sym("u", nj)
-        flags = ca.SX.sym("flags", 10)
-        cref = ca.SX.sym("cref", 10)
+        flags = ca.SX.sym("flags", 2 * nr)
+        cref = ca.SX.sym("cref", 2 * nr)
         pc = ca.SX.sym("pc", 6)
         f_ext = ca.SX.sym("f_ext", 3)  # at the upper-body CoM (push tests)
 
-        R, p = {1: rot_axis((0, 1, 0), q[4]) @ rot_axis((1, 0, 0), q[3])}, {1: q[:3]}
+        Rb = rot_axis((0, 1, 0), q[4]) @ rot_axis((1, 0, 0), q[3])
+        if yaw:
+            Rb = rot_axis((0, 0, 1), q[5]) @ Rb
+        R, p = {1: Rb}, {1: q[:3]}
         for j in range(2, m.njoints):
             P, par, n = m.jointPlacements[j], m.parents[j], m.names[j]
             sn = m.joints[j].shortname()
@@ -202,15 +214,16 @@ class RigidContactModel:
         com = sum(m.inertias[j].mass * (p[j] + R[j] @ ca.DM(m.inertias[j].lever)) for j in range(1, m.njoints))
         com = com / self.mass
 
-        rows, points, axes, tilts, corners = [], [], [], [], []
+        rows, points, axes, tilts, corners, sole_yaw = [], [], [], [], [], []
         for i, side in enumerate(("left", "right")):
             j = m.getJointId(f"{side}_ankle_roll_joint")
             Rf = R[j]
             c = p[j] + Rf @ pc[3 * i : 3 * i + 3]
-            rows += [c, Rf[2, 1], Rf[2, 0]]
+            rows += [c, Rf[2, 1], Rf[2, 0]] + ([Rf[1, 0]] if yaw else [])
             points.append(c)
             axes.append((Rf[:, 0], Rf[:, 1]))
             tilts.append(ca.vertcat(ca.atan2(Rf[2, 1], Rf[2, 2]), -ca.asin(Rf[2, 0])))
+            sole_yaw.append(ca.atan2(Rf[1, 0], Rf[0, 0]))
             corners += [p[j] + Rf @ ca.DM(k) for k in SOLE_CORNERS]
         crow = ca.vertcat(*rows)
         Jc = ca.jacobian(crow, q)
@@ -218,7 +231,7 @@ class RigidContactModel:
         gamma = ca.jacobian(cdot, q) @ qd + 2 * alpha * cdot + alpha**2 * (crow - cref)
 
         Gj = np.zeros((nj, nq))
-        Gj[:, 5:] = np.eye(nj)
+        Gj[:, nb:] = np.eye(nj)
         tau = XH540_STIFFNESS * (u - Gj @ q) - XH540_DAMPING * (Gj @ qd)
 
         data = m.createData()
@@ -228,6 +241,8 @@ class RigidContactModel:
         T = np.zeros((m.nv, nq))
         T[0:3, 0:3] = np.eye(3)
         T[3, 3] = T[4, 4] = 1.0
+        if yaw:
+            T[5, 5] = 1.0
         for n, (iq, g) in jmap.items():
             T[m.joints[m.getJointId(n)].idx_v, iq] = g
         M0 = T.T @ Mfull @ T + Gj.T @ (XH540_ARMATURE * np.eye(nj)) @ Gj
@@ -242,14 +257,7 @@ class RigidContactModel:
         lam = ca.solve(A, -flags * (Jc @ (Minv @ b) + gamma))
         qdd = Minv @ (b + Jc.T @ lam)
 
-        # wrench about each contact point: force = lambda[0:3]; the tilt rows give the moment
-        wrench = []
-        for i, (ex, ey) in enumerate(axes):
-            lam_i = lam[5 * i : 5 * i + 5]
-            wrench.append(
-                ca.vertcat(lam_i[:3], lam_i[3] * ey[1] + lam_i[4] * ex[1], -(lam_i[3] * ey[0] + lam_i[4] * ex[0]))
-            )
-        W = ca.horzcat(*wrench)  # Fx Fy Fz Mx My per foot
+        W = ca.horzcat(*[self.wrench_of(lam[nr * i : nr * (i + 1)], axes[i]) for i in (0, 1)])
         C = ca.horzcat(*points)
 
         self.alpha, self.Gj, self.M0, self.Minv = alpha, Gj, M0, Minv
@@ -259,6 +267,7 @@ class RigidContactModel:
         self.gravity_expr = gravity
         self.points_expr, self.axes_expr = C, axes  # contact points; per foot (sole x axis, sole y axis)
         self.tilt_expr = ca.horzcat(*tilts)  # (roll, pitch) x (left, right)
+        self.sole_yaw_expr = ca.vertcat(*sole_yaw)
         self.corners_expr = ca.horzcat(*corners)  # 3 x 8, left then right
 
         args = [q, qd, u, flags, cref, pc, f_ext]
@@ -273,6 +282,7 @@ class RigidContactModel:
             ca.Function("comd", [q, qd], [self.comd_expr]),
             ca.Function("tilt", [q], [self.tilt_expr]),
             ca.Function("tilt_rate", [q, qd], [tilt_rate]),
+            ca.Function("sole_yaw", [q], [self.sole_yaw_expr]),
             ca.Function("corners", [q], [self.corners_expr]),
         ]
 
@@ -283,23 +293,50 @@ class RigidContactModel:
         for f in functions:
             setattr(self, f"f_{f.name()}", f)
 
-        self.effort = np.array([_effort(n) for n in MODEL_JOINTS])
-        self.q0_joints = np.array([qn[m.joints[m.getJointId(n)].idx_q] for n in MODEL_JOINTS])
+        limits = np.array([_limits(n) for n in joints])
+        self.effort, self.rate_limit = limits[:, 0], limits[:, 1]
+        self.q0_joints = np.array([qn[m.joints[m.getJointId(n)].idx_q] for n in joints])
+
+    def wrench_of(self, lam_i, axes_i):
+        """Fx Fy Fz Mx My (Mz) about the contact point from one foot's row multipliers: the row e_a^T R e_b
+        carries the moment lam (R e_b) x e_a."""
+        ex, ey = axes_i
+        w = ca.vertcat(lam_i[:3], lam_i[3] * ey[1] + lam_i[4] * ex[1], -(lam_i[3] * ey[0] + lam_i[4] * ex[0]))
+        if self.yaw:
+            w[3] -= lam_i[5] * ex[2]
+            w = ca.vertcat(w, lam_i[5] * ex[0])
+        return w
+
+    def contact_config(self, mode_left: str, mode_right: str) -> tuple[np.ndarray, np.ndarray]:
+        """Row flags (2 nr) and contact points (6) for a pair of foot modes.
+
+        Sole pitch equals pelvis pitch through the leg parallelograms, so two active pitch rows are identical; the
+        right one is then switched off and the left one carries the summed pitch moment. Without hip yaw the same
+        holds for the yaw rows."""
+        nr = self.nr
+        (pl, fl), (pr, fr) = CONTACT_MODES[mode_left], CONTACT_MODES[mode_right]
+        flags = np.r_[fl[:nr], fr[:nr]].astype(float)
+        if flags[4] and flags[nr + 4]:
+            flags[nr + 4] = 0.0
+        if self.yaw and not self.hip_yaw and flags[5] and flags[nr + 5]:
+            flags[nr + 5] = 0.0
+        return flags, np.r_[pl, pr]
 
     def contact_refs(self, q: np.ndarray, pc: np.ndarray) -> np.ndarray:
-        """Contact references for a configuration: contact points where they are, on the ground
+        """Contact references for a configuration: contact points and sole yaw where they are, on the ground
         (z = 0), soles level about the constrained axes."""
         cref = np.array(self.f_crow(q, pc)).ravel()
-        cref[[2, 3, 4, 7, 8, 9]] = 0.0
+        for i in (0, 1):
+            cref[self.nr * i + 2 : self.nr * i + 5] = 0.0
         return cref
 
     def initial_state(self, joints: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """Base placed so both flat soles touch z = 0; returns q and the contact references."""
-        _, pc = contact_config("flat", "flat")
+        _, pc = self.contact_config("flat", "flat")
         q = np.zeros(self.nq)
-        q[5:] = joints
+        q[self.nb :] = joints
         c = np.array(self.f_crow(q, pc)).ravel()
-        q[2] = -0.5 * (c[2] + c[7])
+        q[2] = -0.5 * (c[2] + c[self.nr + 2])
         return q, self.contact_refs(q, pc)
 
     def update_refs(self, cref: np.ndarray, q: np.ndarray, pc: np.ndarray, changed: list[bool]) -> np.ndarray:
@@ -307,7 +344,8 @@ class RigidContactModel:
         where it is now, the others keep their references."""
         fresh = self.contact_refs(q, pc)
         cref = np.array(cref, dtype=float)
+        nr = self.nr
         for i in (0, 1):
             if changed[i]:
-                cref[5 * i : 5 * i + 5] = fresh[5 * i : 5 * i + 5]
+                cref[nr * i : nr * (i + 1)] = fresh[nr * i : nr * (i + 1)]
         return cref

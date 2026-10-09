@@ -21,8 +21,8 @@ contact wrench symbolically instead took ~245 ms per solve (integrator sensitivi
 - per-node gates: the leg-length cost only for feet in contact, the swing-position and sole-yaw costs only for feet
   in the air, the minimum normal force only for feet in contact; all constraint bounds are then constant (a foot in
   the air has zero wrench, so its CoP and friction rows read 0 >= 0);
-- all node parameters are written with one set_flat call; the contact algebra along the previous plan is a
-  compiled CasADi function and the node matrices are formed as one batch;
+- all node parameters are written with one set_flat call; the contact algebra and the node matrices along the
+  previous plan are one compiled CasADi function (in numpy they took ~0.8 ms per preparation);
 - the RTI iteration can be split: prepare() linearises for the next tick after this tick's targets are out,
   feedback() then only solves the QP with the new state;
 - lock(): arm and hip yaw targets held at the default pose by their bounds, at runtime on the same build.
@@ -213,14 +213,29 @@ class RobonionNMPC:
 
         self.f_sole = ca.Function("soles", [q], [ca.horzcat(*soles)])
 
-        qs, qds, pcs = ca.SX.sym("qs", nq), ca.SX.sym("qds", nq), ca.SX.sym("pcs", 6)
+        # lambda = L (g0 - J M^-1 b - 2 alpha J qd - alpha^2 J q) with L = A^-1 diag(flags), g0 the contact terms
+        # that do not depend on (b, q, qd) at this node
+        # the matrix algebra in SX on plain matrix inputs (J with the sparsity of the contact Jacobian), called on the
+        # contact algebra through MX: in SX on q directly it generated ~30 MB of C, in MX (QR solve, generic
+        # products) it ran slower than numpy
         raw = M.raw_sx
-        f_map = ca.Function(
-            "alg", [qs, qds, pcs], [raw["Jc"](qs, pcs), raw["crow"](qs, pcs), raw["Jdqd"](qs, qds, pcs)]
-        )
-        f_map = f_map.map(N + 1)
-        Qs, QDs, PCs = ca.SX.sym("Q", nq, N + 1), ca.SX.sym("QD", nq, N + 1), ca.SX.sym("PC", 6, N + 1)
-        f_alg = ca.Function("alg_all", [Qs, QDs, PCs], f_map(Qs, QDs, PCs))
+        Jm = ca.SX.sym("J", raw["Jc"].sparsity_out(0))
+        cm, gm = ca.SX.sym("c", 2 * nr), ca.SX.sym("g", 2 * nr)
+        qm, fl, cr = ca.SX.sym("q", nq), ca.SX.sym("flags", 2 * nr), ca.SX.sym("cref", 2 * nr)
+        Minv = ca.DM(M.Minv)
+        K = Jm @ Minv
+        L = ca.solve(ca.diag(fl) @ (K @ Jm.T) + ca.diag(1 - fl), ca.diag(fl))
+        Lg0 = L @ (gm + a2 * (cm - Jm @ qm - cr))
+        LJ, LK = L @ Jm, L @ K
+        GJ = K.T @ LJ
+        node = ca.vertcat(ca.vec(Minv - K.T @ LK), ca.vec(GJ), -K.T @ Lg0, ca.vec(-LK), ca.vec(LJ), -Lg0)
+        f_mat = ca.Function("mat", [Jm, cm, gm, qm, fl, cr], [node])
+        qs, qds, pcs = ca.MX.sym("qs", nq), ca.MX.sym("qds", nq), ca.MX.sym("pcs", 6)
+        fls, crs = ca.MX.sym("flags", 2 * nr), ca.MX.sym("cref", 2 * nr)
+        alg = f_mat(raw["Jc"](qs, pcs), raw["crow"](qs, pcs), raw["Jdqd"](qs, qds, pcs), qs, fls, crs)
+        f_node = ca.Function("alg", [qs, qds, pcs, fls, crs], [alg]).map(N + 1)
+        args = [ca.MX.sym(a, k, N + 1) for a, k in (("Q", nq), ("QD", nq), ("PC", 6), ("FL", 2 * nr), ("CR", 2 * nr))]
+        f_alg = ca.Function("alg_all", args, [ca.densify(f_node(*args))])
 
         yref = np.zeros(am.cost_y_expr.shape[0])
         yref[4] = self.u_nom[8]
@@ -308,8 +323,14 @@ class RobonionNMPC:
 
         self.ocp = ocp
         self.f_alg = ca.external("alg_all", so_file)
+        # evaluated in place on numpy arrays: converting the ~32k outputs from a DM took ~1.3 ms
+        self._alg_buf, self._alg_eval = self.f_alg.buffer()
+        self._alg_in = [np.zeros((N + 1, k)) for k in (nq, nq, 6, 2 * nr, 2 * nr)]
+        self._alg_out = np.zeros((N + 1, self.f_alg.size1_out(0)))
+        for i, a in enumerate(self._alg_in):
+            self._alg_buf.set_arg(i, memoryview(a))
+        self._alg_buf.set_res(0, memoryview(self._alg_out))
         self.nx = 2 * nq + ns
-        self._diag = np.arange(2 * nr)
         self._cfg_cache = {}
         self.nan_resets = 0
         self.X: np.ndarray | None = None
@@ -349,41 +370,24 @@ class RobonionNMPC:
         return self._cfg_cache[modes]
 
     def _set_params(self, q, qd, plan):
-        n, nq, nr2 = self.N + 1, self.nq, 2 * self.nr
+        nq = self.nq
+        Q, QD, pcs, flags, cref = self._alg_in
         if self.X is None:
-            Q, QD = np.tile(q, (n, 1)), np.tile(qd, (n, 1))
+            Q[:], QD[:] = q, qd
         else:
-            Q, QD = self.X[:, :nq].copy(), self.X[:, nq : 2 * nq].copy()
+            Q[:], QD[:] = self.X[:, :nq], self.X[:, nq : 2 * nq]
             Q[0], QD[0] = q, qd
 
         cfgs = [self._config(tuple(node["modes"])) for node in plan]
-        flags = np.array([cf.flags for cf in cfgs])
-        pcs = np.array([cf.pc for cf in cfgs])
-        J, c, g = (np.array(a) for a in self.f_alg(Q.T, QD.T, pcs.T))
-        Jb = J.reshape(nr2, n, nq).transpose(1, 0, 2)
-        Minv = self.m.Minv
-        A = flags[:, :, None] * (Jb @ Minv @ Jb.transpose(0, 2, 1))
-        A[:, self._diag, self._diag] += 1.0 - flags
-
-        # lambda = L (g0 - J M^-1 b - 2 alpha J qd - alpha^2 J q) with L = A^-1 diag(flags), g0 the contact terms
-        # that do not depend on (b, q, qd) at this node
-        cref = np.array([node["cref"] for node in plan])
-        g0 = g.T + self.m.alpha**2 * (c.T - np.einsum("kij,kj->ki", Jb, Q) - cref)
-        L = np.linalg.inv(A) * flags[:, None, :]
-        LJ = L @ Jb
-        JtL = Minv @ Jb.transpose(0, 2, 1) @ L
-        GJ = JtL @ Jb
-        vec = lambda X: X.transpose(0, 2, 1).reshape(n, -1)  # noqa: E731
+        flags[:] = [cf.flags for cf in cfgs]
+        pcs[:] = [cf.pc for cf in cfgs]
+        cref[:] = [node["cref"] for node in plan]
+        self._alg_eval()
         P = np.concatenate(
             [
                 pcs,
                 np.array([cf.isflat for cf in cfgs]),
-                vec(Minv - GJ @ Minv),
-                vec(GJ),
-                -np.einsum("kij,kj->ki", JtL, g0),
-                vec(-LJ @ Minv),
-                vec(LJ),
-                -np.einsum("kij,kj->ki", L, g0),
+                self._alg_out,
                 np.array([cf.contact for cf in cfgs]),
                 np.array([node["dcm"] for node in plan]),
                 np.array([node["comd"] for node in plan]),

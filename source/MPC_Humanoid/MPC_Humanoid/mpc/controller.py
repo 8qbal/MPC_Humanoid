@@ -19,8 +19,8 @@ that tick only prepares with the new plan and the feedback follows on the next o
 measured mode, later nodes follow the gait plan. The gait logic is a state machine (State), each rule justified by an
 Isaac failure in docs/stage2.md; within STEP:
 
-- a foot scheduled to swing that tips onto an edge while the other sole is flat is peeling off: it is planned
-  in the air and the NMPC keeps running;
+- a foot scheduled to swing that tips onto an edge while the other sole is flat is peeling off (unless held): it is
+  planned in the air and the NMPC keeps running;
 - a swing foot that touches down early ends single support there; one still in the air at the planned end
   extends it tick by tick (up to MAX_STRETCH) while its reference keeps descending.
 """
@@ -307,8 +307,11 @@ class RobonionController:
 
         self._retime(t, modes)
         planned = self.plan.modes(t)
+        # not while held: a hold from touchdown reaches the next single support before PAUSE_AFTER, and peel-off
+        # then lifted the loaded edge foot (+y 1.0 N·s fell, docs/stage3.md)
+        peel = self.state not in HELD
         now = tuple(
-            "air" if m in EDGE_MODES and planned[i] == "air" and modes[1 - i] == "flat" else m
+            "air" if peel and m in EDGE_MODES and planned[i] == "air" and modes[1 - i] == "flat" else m
             for i, m in enumerate(modes)
         )
         self._transition(t, q, qd, now)

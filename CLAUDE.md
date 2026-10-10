@@ -160,12 +160,16 @@ walking. Working notes and every result: `docs/stage3.md` (local, git-ignored); 
     5 ms tuning.
   - A plain 10 ms tick is the fallback only if the whole-body NMPC does not fit.
   - 50 Hz was tried and rejected (falls, slip).
-- Whole body: pelvis yaw, hip yaw and the 8 arm joints, for balance and yaw damping.
-  - Session a3 builds it as an offline prototype on branch `feat/arms-yaw`. It is not in the package yet.
-  - Choices so far: arm targets as NMPC inputs, 1 IRK stage, a ground yaw-moment cost.
-  - The tick does not fit 5 ms yet.
+- Whole body: pelvis yaw, hip yaw and the 8 arm joints in the NMPC, for balance and yaw damping. Built by
+  session a3 on `feat/arms-yaw`, merged 2026-10-10 (51adb38).
+  - Arm targets as NMPC inputs with a servo-error cost, a ground yaw-moment cost (`W_MZ`), Radau with 2 stages
+    on the first 8 intervals and 1 on the rest (1 stage everywhere rolled the soles onto edges in Isaac), HPIPM
+    SPEED_ABS with tolerances 1e-5.
+  - Base yaw comes from the EKF; `--no_arms` / `--no_hip_yaw` hold those joints at the default pose on the same
+    build.
+  - Isaac push table: full 15/15, yaw + arms 14/15, yaw only 15/15. Tick 4.0-4.1 ms mean / 4.9-5.1 ms p95.
 - Walking: straight walking at a commanded speed with an ALIP footstep planner (user decision
-  2026-10-09). Designed in `docs/stage3.md`, not started; it comes after the whole-body port.
+  2026-10-09). Designed in `docs/stage3.md`, not started; next after the whole-body port.
 - The user dropped the Jetson AGX Orin tick benchmark (the Jetson is assumed to keep up).
 - Later:
   - a hardware check of the contact-mode monitor and the estimator, whose thresholds (0.2 deg,
@@ -184,10 +188,11 @@ Known issues from stage 2, listed under *Open* in `docs/stage2.md`:
   beyond ±5 mm falls.
 - All results come from Isaac only; limits within one push step are not precise.
 
-- `model.py`: floating base (x, y, z, roll, pitch) + 9 independent joints
-  (`MODEL_JOINTS`: hip roll, front thigh, ankle pitch, ankle roll per leg, torso pitch);
-  passive joints from `PASSIVE_COUPLING`, yaw/arms/head fixed, mass matrix frozen at the
-  standing pose. Contacts are rigid rows with a contact mode per foot (`flat`, `toe`,
+- `model.py`: floating base (x, y, z, roll, pitch, yaw) + 9 independent joints
+  (`MODEL_JOINTS`: hip roll, front thigh, ankle pitch, ankle roll per leg, torso pitch), hip yaw
+  (`HIP_YAW_JOINTS`) and the 8 arm joints (`ARM_JOINTS`); yaw, hip yaw and arms can be built off (the
+  stage-2 model). Passive joints from `PASSIVE_COUPLING`, head fixed, mass matrix frozen at the
+  standing pose. Contacts are rigid rows (6 per sole with yaw) with a contact mode per foot (`flat`, `toe`,
   `heel`, `left_edge`, `right_edge`, `air`); the contact wrench is eliminated in closed
   form (position-mode servos leave it no freedom). In double support the two sole-pitch
   rows are identical (parallelograms), so the right one is switched off. Servo K/D/armature
@@ -221,8 +226,10 @@ Known issues from stage 2, listed under *Open* in `docs/stage2.md`:
   (`MONITOR_TICKS`; a touchdown impact reads 12-19 deg/s for one tick). The asset runs with 0
   PhysX TGS velocity iterations (`robonionv2.py`): with 4, a flat sole read up to 3.6 deg/s of
   false tilt rate. `NMPC_EVERY = 2`: feedback on every second tick, RTI preparation on the tick
-  between. Targets between the two follow u + v·dt. A full solve runs right away when node 0's
-  contact modes change or the plan is retimed.
+  between. Targets between the two follow u + v·dt. When node 0's contact modes change, the plan is
+  retimed or the NMPC restarts after a hold, that tick only prepares and the feedback follows on the
+  next one (at most one deferral in a row; a full solve does not fit the tick). No peel-off while the
+  targets are held (HOLD, RESET, CATCH).
 - Build: `scripts/build_controller.py` (no Isaac) generates and compiles the C functions, the
   contact algebra (`alg.so`) and the acados solver into `outputs/acados/`; runtime
   (`run_stepping.py`, `benchmark_stepping.py`) only loads them and raises `FileNotFoundError`
@@ -248,14 +255,16 @@ Known issues from stage 2, listed under *Open* in `docs/stage2.md`:
   `nmpc.py` / `controller.py` / `robonion_params.py`, so they only run with the package at git
   tag `stage2` (check that tag out first).
 - Open:
-  - Tick: 2.8-2.9 ms mean / 3.5-3.9 ms p95 in Isaac on the desktop with the 100 Hz NMPC.
-    - +x 1.75 N·s got worse with it (28-53 mm slip, QP failures in one seed); not investigated.
+  - Tick with the whole-body NMPC: 4.0-4.1 ms mean / 4.9-5.1 ms p95 in Isaac on the desktop.
+    - After +x 1.75 N·s the p95 reaches 7.4-7.8 ms in some runs; not investigated.
+    - yaw + arms (`--no_hip_yaw`) fell once at +x 1.75 (seed 1); after +x 1.75 the gait holds for 3-7 s.
     - The real robot runs on a Jetson AGX Orin (not measured, benchmark dropped by the user). If
       needed: `scripts/run_stepping.py --record run.npz` on the desktop, then
       `scripts/build_controller.py` and `scripts/benchmark_stepping.py run.npz` on the Jetson, no
       Isaac needed.
   - Lateral push recovery while stepping needs footstep placement (ALIP, stage 3).
-  - Landing drift ~0.3 mm per step needs pelvis yaw in the model (a3's whole-body work).
+  - Landing drift (~0.3 mm per step in stage 2): with the whole body the foot moves ≤ 1.2 mm over 10 steps
+    without a push; not measured per step.
 - The laptop is shared with other projects: run Isaac and other heavy jobs under
   `flock /tmp/laptop_heavy.lock <command>` (agreed with `slam_project`, 15 GB RAM).
 

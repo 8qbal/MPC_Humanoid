@@ -71,14 +71,15 @@ Full record: [`docs/stage2.md`](stage2.md).  One layer: the rigid-contact NMPC w
 
 ### Stage 3: base position estimation, whole body, walking (set 2026-10-04, widened 2026-10-07 and 2026-10-09; in progress)
 
-Working notes and every result: `docs/stage3.md` (local, git-ignored).  State on 2026-10-09:
+Working notes and every result: `docs/stage3.md` (local, git-ignored).  State on 2026-10-10:
 - **EKF:** in the controller (`mpc/ekf.py`, `LegKinematicsEkf`). Its leg kinematics are compiled with CasADi.
-- **Tick time:** the NMPC runs every second tick (100 Hz). The tick stays 5 ms, and estimation, contact monitor and gait rules stay at 200 Hz. Offline tick: 2.34 ms mean / 2.96 ms p95. 50 Hz was tried and rejected (falls, slip).
-- **Whole body:** pelvis yaw, hip yaw and the 8 arm joints are an offline prototype on branch `feat/arms-yaw`, not in the package yet.
-  - Arm targets are NMPC inputs, with 1 IRK stage. A ground yaw-moment cost lets the arms absorb yaw.
-  - The tick does not fit 5 ms yet.
-  - A sagittal push saturates the hip-yaw servo.
-- **Walking with ALIP:** designed, not started. It comes after the whole-body port.
+- **Tick time:** the NMPC runs every second tick (100 Hz). The tick stays 5 ms, and estimation, contact monitor and gait rules stay at 200 Hz. 50 Hz was tried and rejected (falls, slip).
+- **Whole body:** pelvis yaw, hip yaw and the 8 arm joints are in the NMPC (merged 2026-10-10).
+  - Arm targets are NMPC inputs. A ground yaw-moment cost lets the arms absorb yaw.
+  - Radau with 2 stages on the first half of the horizon: 1 stage everywhere rolled the soles onto edges in Isaac.
+  - Isaac push table: 15/15 with everything on; tick 4.0-4.1 ms mean / 4.9-5.1 ms p95 on the desktop.
+- **Gait rule:** no peel-off while the targets are held (a +y push fell otherwise).
+- **Walking with ALIP:** designed, not started. It is next.
 
 **Walking with the ALIP footstep planner** (Gong & Grizzle 2022, from ARTEMIS, see below):
 - Straight walking at a commanded speed, with start and stop.

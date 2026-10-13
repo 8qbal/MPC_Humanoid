@@ -219,10 +219,14 @@ Rules when working on this pipeline:
 
 ## When editing robot/task config
 
-- `robots/robonionv2.py` deliberately keeps the actuator model (stiffness/damping/
-  armature, estimated from the Dynamixel XH540-W270/XH430-W350 datasheets; effort/velocity limits
-  taken verbatim from the URDF, which the user confirmed correct) separate from the
-  USD asset's raw inertial/collision data — don't fold one into the other.
+- `robots/robonionv2.py` deliberately keeps the actuator model separate from the USD asset's raw
+  inertial/collision data — don't fold one into the other. The actuator model is one `DCMotorCfg`
+  per servo type, from `SERVOS` / `SERVO_JOINTS` in `robots/robonion_params.py` (user, 2026-10-13):
+  XH540-W270 on the legs except hip yaw, XM540-W270 on hip yaw, torso pitch and shoulders,
+  XM430-W350 on the elbows and the head. Effort/velocity are the 12 V datasheet figures (equal to
+  the URDF limits, except hip yaw and elbow pitch, whose URDF numbers belong to the other servo);
+  stiffness/damping from the 11.1 V datasheet figures, armature a placeholder until the servos
+  are identified. `mpc/model.py` and `mpc/nmpc.py` take the same per-joint values.
 - The 4 parallelogram-passive joints (`*_knee_pitch_joint`, `*_back_thigh_pitch_joint`,
   `*_front_shin_pitch_joint`, `*_back_shin_pitch_joint`) are unmotored by design
   (`ImplicitActuatorCfg` with zero stiffness/damping/effort) — do not add a drive to

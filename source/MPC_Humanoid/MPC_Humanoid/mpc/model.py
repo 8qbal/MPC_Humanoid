@@ -30,7 +30,7 @@ import casadi as ca
 import numpy as np
 import pinocchio as pin
 
-from MPC_Humanoid.robots.robonion_params import URDF_LIMITS, XH540_ARMATURE, XH540_DAMPING, XH540_STIFFNESS
+from MPC_Humanoid.robots.robonion_params import servo_of
 
 CONTROLLER_URDF = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "../../../../assets/robonionv2_controller.urdf")
@@ -79,15 +79,6 @@ CONTACT_MODES = {
     "air": (SOLE_CENTRE, (0, 0, 0, 0, 0, 0)),
 }
 EDGE_MODES = ("toe", "heel", "left_edge", "right_edge")
-
-
-def _limits(joint: str) -> tuple[float, float]:
-    """(effort, velocity) limits of a model joint."""
-    if joint.endswith(("hip_yaw_joint", "elbow_yaw_joint")):
-        return URDF_LIMITS["yaw"]
-    if joint == "torso_pitch_joint" or joint in ARM_JOINTS:
-        return URDF_LIMITS["torso_arms"]
-    return URDF_LIMITS["legs"]
 
 
 def rot_axis(axis, angle):
@@ -168,6 +159,10 @@ class RigidContactModel:
         joints = self.joints = MODEL_JOINTS + (HIP_YAW_JOINTS if hip_yaw else []) + (ARM_JOINTS if arms else [])
         self.n_legs = len(MODEL_JOINTS) + (len(HIP_YAW_JOINTS) if hip_yaw else 0)
         nj = self.nj = len(joints)
+        servos = [servo_of(n) for n in joints]
+        self.effort, self.rate_limit = np.array([s.effort for s in servos]), np.array([s.velocity for s in servos])
+        self.stiffness, self.damping = np.array([s.stiffness for s in servos]), np.array([s.damping for s in servos])
+        self.armature = np.array([s.armature for s in servos])
         nq = self.nq = nb + nj
 
         m = pin.buildModelFromUrdf(CONTROLLER_URDF, pin.JointModelFreeFlyer())
@@ -232,7 +227,7 @@ class RigidContactModel:
 
         Gj = np.zeros((nj, nq))
         Gj[:, nb:] = np.eye(nj)
-        tau = XH540_STIFFNESS * (u - Gj @ q) - XH540_DAMPING * (Gj @ qd)
+        tau = ca.DM(self.stiffness) * (u - Gj @ q) - ca.DM(self.damping) * (Gj @ qd)
 
         data = m.createData()
         Mfull = pin.crba(m, data, qn)
@@ -245,7 +240,7 @@ class RigidContactModel:
             T[5, 5] = 1.0
         for n, (iq, g) in jmap.items():
             T[m.joints[m.getJointId(n)].idx_v, iq] = g
-        M0 = T.T @ Mfull @ T + Gj.T @ (XH540_ARMATURE * np.eye(nj)) @ Gj
+        M0 = T.T @ Mfull @ T + Gj.T @ np.diag(self.armature) @ Gj
         Minv = np.linalg.inv(M0)
 
         tj = m.getJointId("torso_pitch_joint")
@@ -293,8 +288,6 @@ class RigidContactModel:
         for f in functions:
             setattr(self, f"f_{f.name()}", f)
 
-        limits = np.array([_limits(n) for n in joints])
-        self.effort, self.rate_limit = limits[:, 0], limits[:, 1]
         self.q0_joints = np.array([qn[m.joints[m.getJointId(n)].idx_q] for n in joints])
 
     def wrench_of(self, lam_i, axes_i):

@@ -38,7 +38,7 @@ from .ekf import LegKinematicsEkf, roll_pitch
 from .estimator import AhrsGyro, ContactModeMonitor, ContactProjectionEstimator
 from .gait import GaitParams, GaitPlan
 from .model import EDGE_MODES, RigidContactModel
-from .nmpc import U_RATE_MAX, RobonionNMPC
+from .nmpc import RobonionNMPC
 
 CROUCH = 0.2  # rad on front thigh and ankle pitch (negative, the LEG_CROUCH convention of robots/robonion_params.py)
 CROUCH_START, CROUCH_TIME = 0.5, 0.8  # s
@@ -383,7 +383,8 @@ class RobonionController:
         if self.model.hip_yaw:
             leg.append(self.model.joints.index(("left_hip_yaw_joint", "right_hip_yaw_joint")[i]))
         u = u.copy()
-        u[leg] += np.clip(self._u_lift[i][leg] - u[leg], -U_RATE_MAX * self.dt, U_RATE_MAX * self.dt)
+        step = self.model.rate_limit[leg] * self.dt
+        u[leg] += np.clip(self._u_lift[i][leg] - u[leg], -step, step)
         return u
 
     def _run_nmpc(self, t, q, qd, now):

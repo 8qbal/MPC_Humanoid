@@ -43,8 +43,6 @@ import casadi as ca
 import numpy as np
 from acados_template import AcadosModel, AcadosOcp, AcadosOcpSolver
 
-from MPC_Humanoid.robots.robonion_params import URDF_LIMITS, XH540_DAMPING, XH540_STIFFNESS
-
 from .model import (
     BUILD_DIR,
     BUILD_HINT,
@@ -67,7 +65,6 @@ EFFORT_FRACTION = 0.8
 # Servo-target excursion from the standing pose [deg]: hip roll, front thigh, ankle pitch, ankle roll
 # (left, right), torso pitch. Without bounds the NMPC swung the torso by over 100 deg after pushes.
 U_RANGE_DEG = np.array([15, 20, 20, 15, 15, 20, 20, 15, 15], dtype=float)
-U_RATE_MAX = URDF_LIMITS["legs"][1]
 HIP_YAW_RANGE_DEG = 15.0
 ARM_RANGE_DEG = np.array([30, 20, 30, 30] * 2, dtype=float)  # shoulder pitch, roll, elbow yaw, pitch (left, right)
 
@@ -140,7 +137,8 @@ class RobonionNMPC:
             yaw_ref,
         )
 
-        tau = XH540_STIFFNESS * (u - q[nb:]) - XH540_DAMPING * qd[nb:]
+        K, D = ca.DM(M.stiffness), ca.DM(M.damping)
+        tau = K * (u - q[nb:]) - D * qd[nb:]
         b = M.Gj.T @ tau - M.gravity_expr
         a1, a2 = 2 * M.alpha, M.alpha**2
         qdd = Pq @ b - GJ @ (a1 * qd + a2 * q) + cq
@@ -171,7 +169,7 @@ class RobonionNMPC:
             hl * fz_flat - m_flat,
             hl * fz_flat + m_flat,  # 6-7 combined CoP-x of the flat soles
             *fric,  # 8-15
-            XH540_STIFFNESS * (u - q[nb:]),  # 16-, servo torque
+            K * (u - q[nb:]),  # 16-, servo torque
         )
         self.nh = am.con_h_expr.shape[0]
         effort = M.effort * EFFORT_FRACTION
@@ -198,7 +196,7 @@ class RobonionNMPC:
         if na:
             # an overdamped servo moves at ~ K/D (u - q): this stands in for the rate cost the arm targets lack
             y.append(ua - q[nb + ns :])
-            w += [W_RATE * (XH540_STIFFNESS / XH540_DAMPING) ** 2] * na
+            w += list(W_RATE * (M.stiffness[ns:] / M.damping[ns:]) ** 2)
         if M.hip_yaw:
             # with hip yaw the pelvis and the swing sole can turn: both follow the planned yaw
             yaw_rows = [(1 - contact[i]) * (M.sole_yaw_expr[i] - yaw_ref) for i in (0, 1)] + [q[5] - yaw_ref]
@@ -261,7 +259,7 @@ class RobonionNMPC:
         ocp.cost.Zl = ocp.cost.Zu = z2
         ocp.constraints.x0 = np.r_[q_init, np.zeros(nq), self.u_nom[:ns]]
         span = np.radians(np.r_[U_RANGE_DEG, [HIP_YAW_RANGE_DEG] * (nl - 9), ARM_RANGE_DEG[:na]])
-        rate = np.r_[[U_RATE_MAX] * 9, M.rate_limit[9:nl]]
+        rate = M.rate_limit[:nl]
         self.u_lo, self.u_hi = self.u_nom - span, self.u_nom + span
         ocp.constraints.idxbx = 2 * nq + np.arange(ns)
         ocp.constraints.lbx, ocp.constraints.ubx = self.u_lo[:ns], self.u_hi[:ns]

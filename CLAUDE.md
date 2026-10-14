@@ -167,7 +167,17 @@ walking. Working notes and every result: `docs/stage3.md` (local, git-ignored); 
     SPEED_ABS with tolerances 1e-5.
   - Base yaw comes from the EKF; `--no_arms` / `--no_hip_yaw` hold those joints at the default pose on the same
     build.
-  - Isaac push table: full 15/15, yaw + arms 14/15, yaw only 15/15. Tick 4.0-4.1 ms mean / 4.9-5.1 ms p95.
+  - Isaac push table at 7485037: full 15/15, yaw + arms 14/15, yaw only 15/15. Tick 4.0-4.1 ms mean / 4.9-5.1 ms
+    p95.
+- Servos per servo type (2026-10-13, 09807f2; see *When editing robot/task config*): Isaac full 13/15, +x 1.75
+  passes 1/3. The bisect found no single cause (new limits, new K/D or the 3.14 rad/s torso rate alone each drop
+  one seed); +x 1.75 sits at the limit. Re-check once the measured servo parameters are in.
+- EKF drift against the Isaac truth (2026-10-12): x, y ≤ 1-3 mm over 11-24 s with up to 74 mm foot slip, z
+  -0.07 mm/s. A 40-step run without push falls after ~29 clean steps (stance sole rolls in single support): a
+  gait issue, open.
+- Upstream `robinion_description` 55ac2c2 (link inertials fixed, `config/actuators.yaml`) is pulled in the
+  submodule but not adopted: the asset and the controller URDF still come from the old URDF, and its servo map
+  differs from ours (elbow pitch, front thigh count, armature, voltage). Details in `docs/stage3.md`.
 - Walking: straight walking at a commanded speed with an ALIP footstep planner (user decision
   2026-10-09). Designed in `docs/stage3.md`, not started; next after the whole-body port.
 - The user dropped the Jetson AGX Orin tick benchmark (the Jetson is assumed to keep up).

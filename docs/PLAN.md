@@ -71,13 +71,15 @@ Full record: [`docs/stage2.md`](stage2.md).  One layer: the rigid-contact NMPC w
 
 ### Stage 3: base position estimation, whole body, walking (set 2026-10-04, widened 2026-10-07 and 2026-10-09; in progress)
 
-Working notes and every result: `docs/stage3.md` (local, git-ignored).  State on 2026-10-10:
+Working notes and every result: `docs/stage3.md` (local, git-ignored).  State on 2026-10-14:
 - **EKF:** in the controller (`mpc/ekf.py`, `LegKinematicsEkf`). Its leg kinematics are compiled with CasADi.
 - **Tick time:** the NMPC runs every second tick (100 Hz). The tick stays 5 ms, and estimation, contact monitor and gait rules stay at 200 Hz. 50 Hz was tried and rejected (falls, slip).
 - **Whole body:** pelvis yaw, hip yaw and the 8 arm joints are in the NMPC (merged 2026-10-10).
   - Arm targets are NMPC inputs. A ground yaw-moment cost lets the arms absorb yaw.
   - Radau with 2 stages on the first half of the horizon: 1 stage everywhere rolled the soles onto edges in Isaac.
   - Isaac push table: 15/15 with everything on; tick 4.0-4.1 ms mean / 4.9-5.1 ms p95 on the desktop.
+- **Servo parameters per servo type** (2026-10-13): XH540-W270 legs except hip yaw, XM540-W270 hip yaw, torso and shoulders, XM430-W350 elbows and head, in both Isaac and the NMPC. Push table 13/15: +x 1.75 N·s passes 1 of 3 seeds (it sits at the limit; no single parameter is the cause). To be re-checked with the measured servo parameters.
+- **EKF validated in Isaac:** base x, y drift ≤ 1-3 mm over 11-24 s against the simulator truth while the feet slip up to 74 mm; z drifts about -0.07 mm/s.
 - **Gait rule:** no peel-off while the targets are held (a +y push fell otherwise).
 - **Walking with ALIP:** designed, not started. It is next.
 

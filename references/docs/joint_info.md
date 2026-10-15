@@ -6,9 +6,9 @@ Reference sheet for building the Robonion `ArticulationCfg` in `source/MPC_Human
 
 | Path | What it is |
 |---|---|
-| `references/robinion_description/robinion2.urdf` | Generated URDF (from `urdf/robinion2.xacro` + `body/head/left_arm/right_arm/left_leg/right_leg.xacro`). **Primary source for all numbers below.** |
+| `references/robinion_description/urdf/robinion2.urdf` | Generated URDF (from `urdf/robinion2.xacro` + `body/head/left_arm/right_arm/left_leg/right_leg.xacro`), upstream 55ac2c2 (inertials fixed, 14.8 V limits from `config/actuators.yaml`). **Source of the asset.** The joint and link tables below still list the pre-55ac2c2 values; the URDF is authoritative. The untracked `robinion2.urdf` at the submodule root is an old local copy, not used. |
 | `assets/robonionv2/` | Raw output of `urdf_usd_converter` (converter version pinned in `robinion.usda`'s `customLayerData.creator`), *before* the hand-authored fixes below: `robinion.usda` (thin root, payloads `Payload/Contents.usda`) + `Payload/{Geometry,Physics,Contents}.usda` + `Payload/GeometryLibrary.usdc` (meshes). Plain tree import: no loop closure, no articulation self-collision override, base welded to the world. Kept as an editable, re-buildable source — do not hand-edit `Payload/`, only `robinion.usda`. |
-| `assets/robonionv2.usd` | **The asset actually loaded by `ArticulationCfg`.** Flattened, standalone (`tools/asset/flatten_usd.py`) copy of `assets/robonionv2/robinion.usda` after the 5 fixes in *USD verification* below: loop-closure joints, self-collision off, floating base, foot inertia, `left_back_thigh_pitch_link` mass. Regenerate it whenever `robonionv2/robinion.usda` changes — never edit it directly. |
+| `assets/robonionv2.usd` | **The asset actually loaded by `ArticulationCfg`.** Flattened, standalone (`tools/asset/flatten_usd.py`) copy of `assets/robonionv2/robinion.usda` after the 3 fixes in *USD verification* below: loop-closure joints, self-collision off, floating base. Inertials and limits are the URDF's, unchanged. Regenerate it whenever `robonionv2/robinion.usda` changes — never edit it directly. |
 | `assets/robonionv2_controller.urdf` | URDF for the controller's Pinocchio model, **generated from `assets/robonionv2.usd`** by `tools/asset/export_controller_urdf.py` (see *Controller URDF*). Carries the USD's corrected inertials, not the reference URDF's. Regenerate it whenever `assets/robonionv2.usd` changes — never edit it directly. |
 | `references/Robinion_InverseKinematic/robinion_description/` | Second copy of the description with a mirrored `leg.xacro` (different axis signs) and `ik_controller_fullbody.py`. The IK script is the only document that states the **parallelogram coupling** between joints (see *Leg mechanism*). |
 
@@ -173,7 +173,7 @@ Note: right shoulder y-offset is −0.1305 but left is +0.0815 — the shoulders
 |---|---|---|---|---|---|---|---|---|---|---|
 | `right_hip_yaw_joint` | revolute | lower_body_link → right_hip_yaw_link | 0 −0.055 0 | 0 0 0 | 0 0 1 | 4.1 | 4.82 | ±1.5708 | 0.1 / 0 | actuated |
 | `right_hip_roll_joint` | revolute | right_hip_yaw_link → right_hip_roll_pitch_link | 0.047875 0 −0.05 | 0 0 0 | 1 0 0 | 9.9 | 4.08 | ±1.5708 | 0.1 / 0 | actuated |
-| `right_front_thigh_pitch_joint` | revolute | right_hip_roll_pitch_link → right_front_thigh_pitch_link | −0.0245 0.0245 0 | 0 0 0 | 0 1 0 | **19.8 in URDF**, 9.9 in USD (fix 7; = left) | 4.08 | ±1.5708 | 0.1 / 0 | actuated (thigh-stage input) |
+| `right_front_thigh_pitch_joint` | revolute | right_hip_roll_pitch_link → right_front_thigh_pitch_link | −0.0245 0.0245 0 | 0 0 0 | 0 1 0 | 19.8 | 4.08 | ±1.5708 | 0.1 / 0 | actuated (thigh-stage input) |
 | `right_back_thigh_pitch_joint` | revolute | right_hip_roll_pitch_link → right_back_thigh_pitch_link | −0.06575 0.0245 0 | 0 0 0 | 0 1 0 | 19.8 | 4.08 | ±1.5708 | 0.1 / 0 | passive, = front_thigh_pitch |
 | `right_knee_pitch_joint` | revolute | right_front_thigh_pitch_link → right_knee_pitch_link | 0 0 −0.2 | 0 0 0 | 0 1 0 | 19.8 | 4.08 | ±1.5708 | 0.1 / 0 | **passive, = −front_thigh_pitch (no motor)** |
 | `right_front_shin_pitch_joint` | revolute | right_knee_pitch_link → right_front_shin_pitch_link | 0 0 −0.04775 | 0 0 0 | 0 1 0 | 9.9 | 4.08 | ±1.5708 | 0.1 / 0 | passive, no actuator |
@@ -246,8 +246,8 @@ Observation: `hip_roll_pitch_link` and `ankle_roll_pitch_link` share identical m
 
 ## Defects found in the URDF (must be fixed in the canonical copy)
 
-1. `*_foot_roll_link` has **izz = −0.000023** — negative principal inertia is physically invalid and will be rejected or silently "fixed" by importers (PhysX rejects it outright for an articulation link, even clamped to exactly 0). *Worked around in `assets/robonionv2.usd` by replacing the negative moment with `5.0e-4`, a value inside the physically valid range for this link (fix 4); the URDF itself is left unchanged.*
-2. Left/right asymmetries that look like typos: `left_front_thigh_pitch` effort 9.9 vs right 19.8; `left_back_thigh_pitch_link` mass 0.078 vs right 0.06. The mass is equalised to the right side in the USD (fix 5). The effort is 9.9 N·m on both sides in the controller/actuator config (`SERVOS["XH540-W270"]`, user decision 2026-10-06); the USD metadata matches since fix 7 sets 9.9 on both sides.
+1. `*_foot_roll_link` has **izz = −0.000023** — negative principal inertia is physically invalid and will be rejected or silently "fixed" by importers (PhysX rejects it outright for an articulation link, even clamped to exactly 0). *Fixed upstream in 55ac2c2 (izz 5.77e-4); the asset no longer patches it.*
+2. Left/right asymmetries that look like typos: `left_front_thigh_pitch` effort 9.9 vs right 19.8; `left_back_thigh_pitch_link` mass 0.078 vs right 0.06. Fixed upstream in 55ac2c2 (both back thighs 0.0667 kg, both front thighs 23.4 N·m, two servos at 14.8 V). The simulator and controller limits still come from `SERVOS` in `robots/robonion_params.py`, not from the URDF.
 3. Thigh/shin bar inertia tensors are copy-pasted (identical for 0.06 kg and 0.079 kg parts).
 4. Loop-closure joints for both parallelograms are absent (URDF limitation) — the passive joints are unconstrained in any simulator that loads the file as-is. *Added in `assets/robonionv2.usd`.*
 5. Shoulder mount y-offsets are not symmetric about the pelvis.
@@ -272,11 +272,11 @@ Check a running Isaac Sim's converter version from its Script Editor: `import ur
 ```bash
 # 1. URDF -> raw USD (converter 0.3.2, via this project's .venv)
 uv run urdf_usd_converter \
-    references/robinion_description/robinion2.urdf \
+    references/robinion_description/urdf/robinion2.urdf \
     assets/robonionv2 \
     -p robinion_description=$PWD/references/robinion_description
 
-# 2. Author the 5 hand-made physics fixes into assets/robonionv2/robinion.usda
+# 2. Author the 3 hand-made physics fixes into assets/robonionv2/robinion.usda
 #    (idempotent: safe to re-run, e.g. after further GUI edits)
 uv run python tools/asset/fix_robinion_usd.py assets/robonionv2/robinion.usda
 
@@ -294,21 +294,16 @@ uv run python tools/asset/export_controller_urdf.py assets/robonionv2.usd assets
 
 The two installs ship different PhysX builds: the revolute loop closure that 110.3.x tolerates makes 110.1.13 explode on ground contact (see *Leg mechanism*). This was diagnosed with a standalone drop test (`scripts/drop_test.py`, since removed — see git history) that dropped the undriven robot on both engines; the spherical closure now in the asset is stable on both.
 
-`assets/robonionv2/robinion.usda` can also be opened and edited in the Isaac Sim GUI (fixes 1–5 can be done by hand there instead of step 2 — see the fix descriptions below for the exact values); re-run steps 3–4 afterwards. Never hand-edit `assets/robonionv2/Payload/*.usda` — that is pure converter output, kept unmodified so a diff of `robinion.usda` against a fresh conversion shows exactly what was added by hand.
+`assets/robonionv2/robinion.usda` can also be opened and edited in the Isaac Sim GUI (fixes 1–3 can be done by hand there instead of step 2 — see the fix descriptions below for the exact values); re-run steps 3–4 afterwards. Never hand-edit `assets/robonionv2/Payload/*.usda` — that is pure converter output, kept unmodified so a diff of `robinion.usda` against a fresh conversion shows exactly what was added by hand.
 
-### 5 fixes (only usd can do it)
+### 3 fixes (only usd can do it)
 
 The URDF only expresses a *tree*, so `urdf_usd_converter` cannot produce these on its own:
 
 1. **4 loop-closure joints**, one pair per leg (thigh stage + shin stage). Each parallelogram's ground/coupler pivots are `0.04125 m` apart and both bars are `0.2 m` long (see *Leg mechanism* above), so for each `*_back_{thigh,shin}_pitch_link` → coupler pair: `PhysicsSphericalJoint`, `body0` = back bar, `body1` = coupler link, `localPos0 = (0, 0, -0.2)`, `localPos1 = (-0.04125, 0, 0)`, `localRot0 = localRot1 = identity`, `excludeFromArticulation = True` (PhysX articulations must be trees; this authors the loop as an ordinary constraint instead). It must be **spherical**, not revolute — a revolute closure over-constrains the planar 4-bar and explodes on contact under omni.physx 110.1.x (see *Leg mechanism*). The script migrates an older revolute closure automatically.
 2. **Self-collision off** on the articulation root (`lower_body_link`): `PhysxArticulationAPI` + `physxArticulation:enabledSelfCollisions = False` (and `newton:selfCollisionEnabled = False` for the Newton backend the converter also targets).
 3. **Floating base**: deactivate `base_to_lower_body_fixed_joint` (`active = False`). The converter ties `base_link` (massless in the URDF) to the asset root, which PhysX treats as welded to the world; a walking robot needs a free pelvis. Because the joint is `def`-ined in `Payload/Physics.usda`, the root layer can only override it (`active = false`), not truly delete it — that is expected, not a mistake.
-4. **Negative inertia fix**: URDF gives `*_foot_roll_link` `izz = -2.3e-5`, a negative principal moment (invalid). PhysX requires every principal moment to be strictly `> 0` for an articulation link, so clamping to `0` is rejected too (`PxRigidBody::setMassSpaceInertiaTensor(): components must be > 0 for articulations`). `fix_robinion_usd.py` scans every prim with `physics:diagonalInertia` and replaces any non-positive component with `NEGATIVE_INERTIA_REPLACEMENT = 5.0e-4` (also in `newton:inertia`), leaving the other moments, CoM and principal axes untouched: `diagonalInertia = (5.0e-4, 8.098e-5, 5.570e-4)`. `5.0e-4` comes from the triangle inequality every rigid body's principal moments must satisfy (`|Ixx-Iyy| <= Izz <= Ixx+Iyy`, giving `[4.76e-4, 6.38e-4]` here) cross-checked against a uniform-box estimate from the foot mesh's bounding box (`~6.70e-4`); see the script for the derivation. The inertia is deliberately *not* recomputed from the STL.
-5. **`left_back_thigh_pitch_link` mass** 0.078 → 0.06 kg, to match `right_back_thigh_pitch_link` (URDF asymmetry, presumed typo — see *Defects* item 2).
-
-7. **Front-thigh effort limit 9.9 N·m on both sides** (`urdf:limit:effort`): `right_front_thigh_pitch_joint` 19.8 → 9.9; the left one is authored too (9.9, its URDF value), replacing an earlier 19.8 override. Both front thighs are one XH540-W270 (9.9 N·m stall at 12 V; user decision 2026-10-06, see *Defects* item 2). Simulation limits come from `robots/robonion_params.py` (`SERVOS["XH540-W270"]`), so this keeps the USD metadata and the exported controller URDF consistent with the config.
-
-`tools/asset/fix_robinion_usd.py` implements fixes 1-7 (the list above covers the authored-physics ones); pass `--no-mass-fix` to skip #5 if you'd rather leave the asymmetry in place.
+Inertials and limits are taken from the URDF unchanged. Earlier versions of the script also patched the foot inertia, the `left_back_thigh_pitch_link` mass, the ankle CoM and the front-thigh effort (fixes 4–7); upstream 55ac2c2 fixed the first three in the URDF, and the effort limits in the asset are metadata only (the actuator config overrides them).
 
 ### Historical bug (converter ≤ 0.1.3, no longer relevant to the current pipeline)
 
@@ -321,29 +316,23 @@ An earlier version of this asset was built via the Isaac Sim Full 6.0.1 GUI impo
 Expected `assets/robonionv2.usd` SUMMARY — anything beyond this list means an authored value drifted from the URDF or a fix regressed:
 
 ```
-Counter({'INFO': 7, 'WARN': 2})
-[INFO] right_ankle_roll_pitch_link: URDF inertial origin ignores the visual mesh offset, expecting CoM shifted  (fix 6)
-[INFO] right_foot_roll_link: URDF inertia has negative principal value ..., expecting it replaced with 0.0005 in USD  (fix 4; the checker compares against the replaced tensor)
-[WARN] left_back_thigh_pitch_link: mass urdf 0.078 vs usd 0.06  (fix 5)
-[INFO] left_ankle_roll_pitch_link: URDF inertial origin ignores the visual mesh offset  (fix 6)
-[INFO] left_foot_roll_link: URDF inertia has negative principal value ...  (fix 4)
-[INFO] joint base_to_lower_body_fixed_joint (fixed) missing/inactive  (fix 3)
-[INFO] joint imu_fixed_joint (fixed) missing/inactive  (converter merges massless links)
-[INFO] joint cam_fixed_joint (fixed) missing/inactive  (converter merges massless links)
-[WARN] right_front_thigh_pitch_joint: effort 9.9 != urdf 19.8  (fix 7)
+Counter({'INFO': 3})
+[INFO] joint base_to_lower_body_fixed_joint (fixed) missing/inactive in USD  (fix 3)
+[INFO] joint imu_fixed_joint (fixed) missing/inactive in USD  (converter merges massless links)
+[INFO] joint cam_fixed_joint (fixed) missing/inactive in USD  (converter merges massless links)
 ```
 
 Everything else matches the URDF exactly: 35 links, 34 joints (29 revolute + 5 fixed), all transforms/mass/CoM/inertia/mesh/collision data, all 4 loop-joint anchors at 0.000 mm gap, self-collision off, no stray `PhysicsScene`/viewport prims in the flattened file, and `layers used: ['assets/robonionv2.usd']` (standalone, no dependency on `assets/robonionv2/` or `references/`).
 
 ### Controller URDF
 
-Pinocchio cannot read USD, and the reference URDF lacks the inertial corrections authored by `fix_robinion_usd.py`, so the controller loads `assets/robonionv2_controller.urdf`, exported from the final USD by `tools/asset/export_controller_urdf.py`:
+Pinocchio cannot read USD, so the controller loads `assets/robonionv2_controller.urdf`, exported from the final USD by `tools/asset/export_controller_urdf.py`:
 
 - **Links:** the 32 rigid bodies with mass, CoM and full inertia tensor (`R·diag·Rᵀ` from `principalAxes`/`diagonalInertia`), plus `imu_link` and `cam_link` as massless frames.  No meshes.
 - **Joints:** 29 revolute + 2 gripper fixed joints from the physics joint frames (`localPos`/`localRot`), with axis, limits, effort, velocity and damping.  The 4 loop-closure joints are skipped (a URDF is a tree); the controller closes the loops with the linear parallelogram coupling (see *Leg mechanism*).
 - **Root:** `lower_body_link`, the articulation root in the USD (`base_link` is not a body there).
 
-The script loads the result back with Pinocchio (free-flyer root) and compares it to the USD at the zero pose.  Current result: `nq = 36`, `nv = 35`, body placements within `3e-8 m`, total mass `7.932532 kg` in both, whole-body CoM within `2e-9 m`.  Against the reference URDF, forward kinematics at 20 random poses agree within `1.3e-6 m` and joint limits/efforts match; only the inertials differ, by the USD fixes.  `check_urdf_vs_usd.py` is not meant for this file: it expects the raw reference URDF (e.g. it expects the ankle CoM offset between URDF and USD) and compares meshes.
+The script loads the result back with Pinocchio (free-flyer root) and compares it to the USD at the zero pose.  Current result: `nq = 36`, `nv = 35`, body placements within `3e-8 m`, total mass `7.959332 kg` in both, whole-body CoM within `2e-9 m`.  Against the reference URDF, forward kinematics at 20 random poses agree within `1.3e-6 m` and joint limits/efforts match. `check_urdf_vs_usd.py` is not meant for this file: it expects the reference URDF and compares meshes.
 
 ### Observations carried over from the URDF (not conversion errors)
 

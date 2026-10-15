@@ -1,8 +1,6 @@
 """Export the corrected USD asset as a URDF for the controller's Pinocchio model.
 
-Pinocchio cannot read USD, and the reference URDF lacks the fixes that
-fix_robinion_usd.py applies to the USD (ankle CoM offset, back-thigh mass,
-negative foot inertia). This script writes the kinematic tree and inertial
+Pinocchio cannot read USD. This script writes the kinematic tree and inertial
 parameters exactly as PhysX sees them, so the controller and the simulator
 share one model:
 
@@ -83,9 +81,14 @@ for name, body in bodies.items():
     ET.SubElement(inertial, "origin", xyz=fmt(com), rpy="0 0 0")
     ET.SubElement(inertial, "mass", value=f"{mass:.9g}")
     ET.SubElement(
-        inertial, "inertia",
-        ixx=f"{I[0, 0]:.9g}", ixy=f"{I[0, 1]:.9g}", ixz=f"{I[0, 2]:.9g}",
-        iyy=f"{I[1, 1]:.9g}", iyz=f"{I[1, 2]:.9g}", izz=f"{I[2, 2]:.9g}",
+        inertial,
+        "inertia",
+        ixx=f"{I[0, 0]:.9g}",
+        ixy=f"{I[0, 1]:.9g}",
+        ixz=f"{I[0, 2]:.9g}",
+        iyy=f"{I[1, 1]:.9g}",
+        iyz=f"{I[1, 2]:.9g}",
+        izz=f"{I[2, 2]:.9g}",
     )
 
 for j in tree_joints:
@@ -106,10 +109,12 @@ for j in tree_joints:
         effort = attr(j, "drive:angular:physics:maxForce") or attr(j, "urdf:limit:effort")
         velocity = math.radians(attr(j, "physxJoint:maxJointVelocity") or attr(j, "newton:velocityLimit"))
         ET.SubElement(
-            joint, "limit",
+            joint,
+            "limit",
             lower=f"{math.radians(attr(j, 'physics:lowerLimit')):.9g}",
             upper=f"{math.radians(attr(j, 'physics:upperLimit')):.9g}",
-            effort=f"{effort:.9g}", velocity=f"{velocity:.9g}",
+            effort=f"{effort:.9g}",
+            velocity=f"{velocity:.9g}",
         )
         damping = attr(j, "newton:damping")
         if damping is not None:
@@ -151,10 +156,13 @@ for name, body in bodies.items():
     worst = max(worst, np.abs(M.translation - t).max(), np.abs(M.rotation - R).max())
 
 usd_mass = sum(attr(b, "physics:mass") for b in bodies.values())
-usd_com = sum(
-    attr(b, "physics:mass") * (world(b)[1] @ np.array(attr(b, "physics:centerOfMass")) + world(b)[0])
-    for b in bodies.values()
-) / usd_mass
+usd_com = (
+    sum(
+        attr(b, "physics:mass") * (world(b)[1] @ np.array(attr(b, "physics:centerOfMass")) + world(b)[0])
+        for b in bodies.values()
+    )
+    / usd_mass
+)
 pin_com = pin.centerOfMass(model, data, q)
 revolute = sum(1 for j in tree_joints if j.GetTypeName() == "PhysicsRevoluteJoint")
 

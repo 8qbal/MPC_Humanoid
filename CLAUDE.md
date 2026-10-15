@@ -281,7 +281,7 @@ Known issues from stage 2, listed under *Open* in `docs/stage2.md`:
 ## The URDF → USD pipeline (assets/robonionv2.usd)
 
 This is the asset `Robonion_CFG` in `robots/robonionv2.py` loads. It is derived
-from `references/robinion_description/robinion2.urdf` by a converter that only
+from `references/robinion_description/urdf/robinion2.urdf` by a converter that only
 understands trees, so a fixed set of physics facts (parallelogram loop joints,
 floating base, foot inertia, etc.) must be re-authored by hand after every
 conversion. **Read `references/docs/joint_info.md` in full before touching this
@@ -290,7 +290,7 @@ known defects in the URDF, and the exact pipeline below. Do not regenerate or
 hand-edit `assets/robonionv2.usd` without reading it first.
 
 ```bash
-uv run urdf_usd_converter references/robinion_description/robinion2.urdf assets/robonionv2 \
+uv run urdf_usd_converter references/robinion_description/urdf/robinion2.urdf assets/robonionv2 \
     -p robinion_description=$PWD/references/robinion_description   # 1. URDF -> raw USD
 uv run python tools/asset/fix_robinion_usd.py assets/robonionv2/robinion.usda  # 2. hand-made physics fixes
 uv run python tools/asset/flatten_usd.py assets/robonionv2/robinion.usda assets/robonionv2.usd  # 3. standalone asset

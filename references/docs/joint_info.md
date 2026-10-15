@@ -13,8 +13,8 @@ Reference sheet for building the Robonion `ArticulationCfg` in `source/MPC_Human
 | `references/Robinion_InverseKinematic/robinion_description/` | Second copy of the description with a mirrored `leg.xacro` (different axis signs) and `ik_controller_fullbody.py`. The IK script is the only document that states the **parallelogram coupling** between joints (see *Leg mechanism*). |
 
 Notes:
-- Actuators (robot owner, 2026-10-13), 11.1 V bus: **Dynamixel XH540-W270** on the legs except hip yaw (hip roll, front thigh pitch, ankle pitch, ankle roll); **XM540-W270** on hip yaw, torso pitch, shoulder pitch and roll; **XM430-W350** on elbow yaw and pitch, head yaw and pitch. The URDF limits (4.1 / 9.9 / 10.6 / 19.8 N·m; 3.14 / 4.08 / 4.82 rad/s) are the 12 V stall torque / no-load speed of these three servos (XM430 / XH540 / XM540), but the URDF gives hip yaw the XM430 numbers and elbow pitch the XM540 numbers; the config follows the servo assignment (`SERVOS`, `SERVO_JOINTS` in `robots/robonion_params.py`). The right front thigh uses 9.9 N·m like the left (one XH540-W270; URDF has 19.8 on the right; user decision 2026-10-06, see *Defects* item 2).
-- The knee joint (`*_knee_pitch_joint`) has **no actuator** (confirmed by the user).
+- Actuators (user, 2026-10-15; supersedes 2026-10-13): the servo map and figures of upstream `config/actuators.yaml` (55ac2c2), which also produce the URDF `<limit>`/`<dynamics>`. **XH540-W270** on hip roll, front thigh pitch (2 servos), knee pitch (2), front shin pitch, ankle pitch, ankle roll; **XM540-W270** on hip yaw, torso pitch, shoulder pitch/roll, elbow pitch; **XM430-W350** on elbow yaw, head yaw/pitch. 14.8 V figures; armature 0.038 and Coulomb friction are BAM priors from MX servos (upstream's own note), not measurements. In code: `SERVOS`, `SERVO_JOINTS` in `robots/robonion_params.py`.
+- The knee (`*_knee_pitch_joint`) and front shin (`*_front_shin_pitch_joint`) **carry servos** (user, 2026-10-15). The 2026-09 statement "knee has no actuator, 5 motors per leg" is superseded. Kinematically they still follow front thigh / ankle pitch (parallelograms), so each leg keeps 2 pitch DOF.
 - **Two separate Isaac Sim installations exist on the dev machine, with two different converter versions** — see *USD verification* for why this matters before you re-run the GUI importer.
 
 ## Robot overview
@@ -121,15 +121,17 @@ Verified numerically: at q = 0 both anchor points of each loop joint coincide in
 
 **Why spherical, not revolute.** The three tree joints of each stage are already parallel revolutes, so the closure only needs to pin one point (3 constraints). A revolute closure adds 5 and leaves the planar 4-bar over-constrained by 3 (Grübler in 3D: 6·3 − 4·5 = −2). The closure was originally authored as a revolute; that is stable on omni.physx 110.3.x (this venv's Isaac Sim 6.1.0) but on **omni.physx 110.1.13 (the Isaac Sim 6.0.1 GUI install at `/home/tkuai/isaacsim`) it makes the whole articulation explode to ~1e14 m on first ground contact** (`Invalid PhysX transform detected` on every link, robot vanishes). Reproduced and fixed headlessly with `drop_test.py` (removed, see git history): same asset, same scene, revolute closure → explodes at t ≈ 0.6 s on 110.1.13; spherical closure → stable on both builds, anchor gaps ≤ 0.3 mm after the robot collapses onto the ground. Raising solver iterations, disabling self-collision, timestep, GPU vs CPU dynamics and spawn height made no difference — only the joint type did.
 
+**2026-10-15 update:** the servo map now follows upstream `config/actuators.yaml` (user): knee and front shin carry servos too, so the thigh stage is driven by 4 servos (front thigh ×2, knee ×2) and the shin stage by 2 (front shin, ankle pitch). The paragraph below records the earlier 5-motor assumption; the coupling and the 2 pitch DOF per leg are unchanged.
+
 Because both stages are parallelograms, the coupler links **never rotate relative to their ground link**. `ik_controller_fullbody.py` (lines 204-224) publishes the mimic relation for all four passive joints, but the *direction of actuation* it implies (front_thigh and front_shin driven, ankle_pitch passive) is superseded by the user's direct confirmation of the real hardware: each leg has exactly 5 motors -- hip yaw, hip roll, hip pitch (`front_thigh_pitch_joint`), ankle pitch (`ankle_pitch_joint`), ankle roll -- hip yaw an XM540-W270, the other four XH540-W270. The thigh parallelogram is driven from its **proximal** end (hip pitch motor on `front_thigh_pitch_joint`); the shin parallelogram is driven from its **distal** end (ankle pitch motor on `ankle_pitch_joint`), not from the knee end via `front_shin_pitch_joint`. This is the assignment implemented in `robots/robonionv2.py` and `env/robinion_env_cfg.py` (`ankle_pitch` actuated, `front_shin_pitch` passive) -- do not revert it to the IK script's implied direction without re-confirming with the user.
 
 | Joint | Relation | Nature |
 |---|---|---|
-| `back_thigh_pitch` | = `front_thigh_pitch` | passive, mimic +1 |
-| `knee_pitch` | = −`front_thigh_pitch` | **passive, mimic −1** (no actuator) |
-| `back_shin_pitch` | = `front_shin_pitch` | passive, mimic +1 |
-| `front_shin_pitch` | driven by the ankle-pitch motor through the shin parallelogram | **passive, no actuator of its own** |
-| `ankle_pitch` | = −`front_shin_pitch` kinematically, but is the joint the ankle-pitch motor actually drives | **actuated** |
+| `back_thigh_pitch` | = `front_thigh_pitch` | unpowered bar, mimic +1 |
+| `knee_pitch` | = −`front_thigh_pitch` | **2 servos since 2026-10-15** (was: passive); target = −front thigh target |
+| `back_shin_pitch` | = `front_shin_pitch` | unpowered bar, mimic +1 |
+| `front_shin_pitch` | = −`ankle_pitch` | **1 servo since 2026-10-15** (was: passive); target = −ankle pitch target |
+| `ankle_pitch` | = −`front_shin_pitch` kinematically | **actuated**, independent coordinate of the shin stage |
 
 Net effect: the foot sole always stays parallel to the pelvis in the sagittal plane (no independent foot-pitch DOF); the two independently actuated sagittal joints are `front_thigh_pitch` (hip pitch motor) and `ankle_pitch` (ankle pitch motor), plus hip yaw, hip roll and ankle roll. The IK script uses link lengths `L1 = L2 = 0.18 m` whereas the URDF uses 0.20 m for both bars — one of them is wrong; measure the real robot.
 

@@ -8,12 +8,13 @@ import isaaclab.sim as sim_utils
 from isaaclab.actuators import DCMotorCfg, ImplicitActuatorCfg
 from isaaclab.assets import ArticulationCfg
 
-from .robonion_params import (
-    DEFAULT_JOINT_POS,
-    SERVO_JOINTS,
-    SERVOS,
-    URDF_FRICTION,
-)
+from .robonion_params import DEFAULT_JOINT_POS, SERVO_JOINTS, SERVOS, scaled
+
+# one actuator group per servo type and number of servos per joint
+_GROUPS: dict[tuple[str, int], list[str]] = {}
+for _name, _joints in SERVO_JOINTS.items():
+    for _pattern, _count in _joints.items():
+        _GROUPS.setdefault((_name, _count), []).append(_pattern)
 
 MPC_HUMANOID_ASSETS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../assets"))
 
@@ -48,29 +49,26 @@ Robonion_CFG = ArticulationCfg(
     soft_joint_pos_limit_factor=0.9,
     actuators={
         # the group name goes into a USD prim name, which cannot hold '-'
-        name.replace("-", "_"): DCMotorCfg(
+        f"{name.replace('-', '_')}_x{count}": DCMotorCfg(
             joint_names_expr=patterns,
-            saturation_effort=SERVOS[name].effort,
-            actuator_effort_limit=SERVOS[name].effort,
-            actuator_velocity_limit=SERVOS[name].velocity,
-            joint_effort_limit=SERVOS[name].effort,
-            joint_velocity_limit=SERVOS[name].velocity,
-            stiffness=SERVOS[name].stiffness,
-            damping=SERVOS[name].damping,
-            friction=URDF_FRICTION,
-            armature=SERVOS[name].armature,
+            saturation_effort=s.effort,
+            actuator_effort_limit=s.effort,
+            actuator_velocity_limit=s.velocity,
+            joint_effort_limit=s.effort,
+            joint_velocity_limit=s.velocity,
+            stiffness=s.stiffness,
+            damping=s.damping,
+            friction=s.friction,
+            dynamic_friction=s.friction,
+            armature=s.armature,
         )
-        for name, patterns in SERVO_JOINTS.items()
+        for (name, count), patterns in _GROUPS.items()
+        for s in [scaled(SERVOS[name], count)]
     }
     | {
-        # Passive joints in the knee four-bar linkage.
+        # The back bars of the two parallelograms carry no servo.
         "passive": ImplicitActuatorCfg(
-            joint_names_expr=[
-                ".*_knee_pitch_joint",
-                ".*_back_thigh_pitch_joint",
-                ".*_front_shin_pitch_joint",
-                ".*_back_shin_pitch_joint",
-            ],
+            joint_names_expr=[".*_back_thigh_pitch_joint", ".*_back_shin_pitch_joint"],
             stiffness=0.0,
             damping=0.0,
             joint_effort_limit=0.0,

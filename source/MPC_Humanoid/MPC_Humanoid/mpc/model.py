@@ -11,13 +11,14 @@ Rz(yaw) Ry(pitch) Rx(roll). With yaw, hip_yaw and arms off this is the stage-2 m
 q = [base x, y, z, roll, pitch, L hip_roll, L front_thigh, L ankle_pitch, L ankle_roll,
      R hip_roll, R front_thigh, R ankle_pitch, R ankle_roll, torso_pitch]   (14)
 
-Joints not in the model (head, and hip yaw / arms when off) stay at their defaults; the passive parallelogram joints
-follow PASSIVE_COUPLING. The mass matrix is frozen at the standing pose; gravity, contact kinematics and servo
-torques are exact. Each sole has 5 or 6 contact rows: position of a contact point (3), z of the sole y axis (roll),
-z of the sole x axis (pitch) and, with yaw, y of the sole x axis (yaw). The contact point and a flag per row select
-the contact mode of each foot (flat, rolling on an edge, in the air): an active row is a Baumgarte-stabilised
-acceleration constraint, an inactive row has lambda_i = 0. The position-mode servos leave the contact wrench no
-freedom, so it is eliminated in closed form, lambda(q, qd, u).
+Joints not in the model (head, and hip yaw / arms when off) stay at their defaults; the parallelogram joints
+follow PASSIVE_COUPLING, and the servos on knee and front shin act on the coordinate they follow (drive_of). The
+mass matrix is frozen at the standing pose; gravity, contact kinematics and servo torques are exact. Each sole has
+5 or 6 contact rows: position of a contact point (3), z of the sole y axis (roll), z of the sole x axis (pitch) and,
+with yaw, y of the sole x axis (yaw). The contact point and a flag per row select the contact mode of each foot
+(flat, rolling on an edge, in the air): an active row is a Baumgarte-stabilised acceleration constraint, an inactive
+row has lambda_i = 0. The position-mode servos leave the contact wrench no freedom, so it is eliminated in closed
+form, lambda(q, qd, u).
 """
 
 from __future__ import annotations
@@ -30,20 +31,13 @@ import casadi as ca
 import numpy as np
 import pinocchio as pin
 
-from MPC_Humanoid.robots.robonion_params import servo_of
+from MPC_Humanoid.robots.robonion_params import PASSIVE_COUPLING, drive_of
 
 CONTROLLER_URDF = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "../../../../assets/robonionv2_controller.urdf")
 )
 BUILD_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../outputs/acados"))
 BUILD_HINT = "run `uv run python scripts/build_controller.py` first (no Isaac needed)"
-
-PASSIVE_COUPLING = {  # parallelogram (4-bar) passive joint suffix: (actuated joint suffix, gain)
-    "knee_pitch_joint": ("front_thigh_pitch_joint", -1.0),
-    "back_thigh_pitch_joint": ("front_thigh_pitch_joint", 1.0),
-    "front_shin_pitch_joint": ("ankle_pitch_joint", -1.0),
-    "back_shin_pitch_joint": ("ankle_pitch_joint", -1.0),
-}
 
 GRAVITY = 9.81
 
@@ -159,7 +153,7 @@ class RigidContactModel:
         joints = self.joints = MODEL_JOINTS + (HIP_YAW_JOINTS if hip_yaw else []) + (ARM_JOINTS if arms else [])
         self.n_legs = len(MODEL_JOINTS) + (len(HIP_YAW_JOINTS) if hip_yaw else 0)
         nj = self.nj = len(joints)
-        servos = [servo_of(n) for n in joints]
+        servos = [drive_of(n) for n in joints]
         self.effort, self.rate_limit = np.array([s.effort for s in servos]), np.array([s.velocity for s in servos])
         self.stiffness, self.damping = np.array([s.stiffness for s in servos]), np.array([s.damping for s in servos])
         self.armature = np.array([s.armature for s in servos])

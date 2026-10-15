@@ -27,8 +27,9 @@ from isaaclab.utils.noise import NoiseModelWithAdditiveBiasCfg
 from isaaclab_physx.physics import PhysxCfg
 
 from ..robots.robonionv2 import Robonion_CFG
+from .actions import CoupledJointPositionActionCfg
 
-# Independently actuated joints
+# Independent joints; the servos on knee and front shin follow front thigh and ankle pitch (CoupledJointPositionAction)
 _ACTUATED_JOINTS = [
     ".*_hip_yaw_joint",
     ".*_hip_roll_joint",
@@ -49,7 +50,7 @@ _IMU_PATH = "{ENV_REGEX_NS}/Robot/.*/upper_body_link/imu_link"
 
 
 @configclass
-class MpcHumanoidRobonionSceneCfg(InteractiveSceneCfg):    
+class MpcHumanoidRobonionSceneCfg(InteractiveSceneCfg):
     ground = AssetBaseCfg(
         prim_path="/World/ground",
         spawn=sim_utils.CuboidCfg(
@@ -75,7 +76,7 @@ class MpcHumanoidRobonionSceneCfg(InteractiveSceneCfg):
 
 @configclass
 class ActionsCfg:
-    joint_pos = mdp.JointPositionActionCfg(asset_name="robot", joint_names=_ACTUATED_JOINTS, scale=1.0)
+    joint_pos = CoupledJointPositionActionCfg(asset_name="robot", joint_names=_ACTUATED_JOINTS, scale=1.0)
 
 
 @configclass
@@ -85,7 +86,7 @@ class ObservationsCfg:
         """State that can be observed and measured."""
 
         # std at 200 Hz from the Xsens MTi-630 leaflet (Feb 2025): gyro 0.007 deg/s/sqrt(Hz),
-        # accel 60 ug/sqrt(Hz). 
+        # accel 60 ug/sqrt(Hz).
         imu_ang_vel = ObsTerm(
             func=mdp.imu_ang_vel, params={"asset_cfg": SceneEntityCfg("imu")}, noise=Gnoise(std=0.002)
         )
@@ -113,6 +114,7 @@ class ObservationsCfg:
 @configclass
 class EventsCfg:
     reset_scene = EventTerm(func=mdp.reset_scene_to_default, mode="reset", params={"reset_joint_targets": True})
+
 
 @configclass
 class MpcHumanoidRobonionEnvCfg(ManagerBasedEnvCfg):

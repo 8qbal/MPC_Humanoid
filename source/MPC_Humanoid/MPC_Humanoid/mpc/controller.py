@@ -46,9 +46,10 @@ CALIBRATION_START, GAIT_START = 1.5, 2.0  # s; AHRS bias averaged in between, bo
 # Edge detection by predicted tilt (ContactModeMonitor lead): 15 ms ahead, as early as the stage-1 rate trigger
 # (docs/stage1.md), which flags soles levelling out after a weight shift and touchdown rocking while stepping.
 MONITOR_LEAD = 0.015  # s
-# The predicted tilt must flag the same edge on 2 consecutive ticks: a one-tick touchdown impact (12-14 deg/s at zero
-# tilt) otherwise held the targets 0.4-0.8 s over 20 steps at 3 cm.
-MONITOR_TICKS = 2
+# The predicted tilt must flag the same edge on 3 consecutive ticks: with 1, a one-tick touchdown impact (12-14 deg/s
+# at zero tilt) held the targets 0.4-0.8 s over 20 steps at 3 cm; with 2 and the 0.038 armature, the 0.1-0.15 deg
+# sole wobble after touchdown held them for seconds (2026-10-15).
+MONITOR_TICKS = 3
 COM_RAMP = 1.0  # s, DCM target from the CoM at the start to the middle of the soles
 MAX_STRETCH = 0.15  # s a single-support phase may run beyond its planned end waiting for touchdown
 # A sole resting on an edge: its tilt angle stays within STILL_SPAN for STILL_TIME; the targets then move to the

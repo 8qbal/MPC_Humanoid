@@ -23,7 +23,7 @@ from .model import GRAVITY
 @dataclass
 class GaitParams:
     t_ss: float = 0.30
-    t_ds: float = 0.10
+    t_ds: float = 0.20  # 0.10 slid the soles apart at weight transfer with the 0.038 armature (2026-10-15)
     clearance: float = 0.02  # m, peak sole lift
     n_steps: int = 10
     t_stand: float = 1.5  # s standing before the first weight shift and after the last step

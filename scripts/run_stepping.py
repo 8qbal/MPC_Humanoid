@@ -27,7 +27,7 @@ parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.R
 parser.add_argument("--steps", type=int, default=10)
 parser.add_argument("--clearance", type=float, default=0.02, help="[m] peak sole lift")
 parser.add_argument("--t_ss", type=float, default=0.30, help="[s] single support")
-parser.add_argument("--t_ds", type=float, default=0.10, help="[s] double support")
+parser.add_argument("--t_ds", type=float, default=0.20, help="[s] double support")
 parser.add_argument("--push", default=None, help="axis and impulse [N*s], e.g. x+1.75 or y-1.0")
 parser.add_argument("--push_at", default="mid_ss", choices=("mid_ss", "ds"))
 parser.add_argument("--push_duration", type=float, default=0.05, help="[s]")

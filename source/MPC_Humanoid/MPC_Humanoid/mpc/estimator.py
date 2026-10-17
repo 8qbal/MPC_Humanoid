@@ -160,6 +160,9 @@ class ContactModeMonitor:
     rate_ticks: the rate (or predicted-tilt) test must name the same edge on this many consecutive ticks;
     the tilt-angle test stays immediate. A touchdown impact reads 12-19 deg/s on a single tick at zero
     tilt, flagging a flat sole.
+
+    settle_ticks: for this many ticks from the touchdown of one foot (that tick included), the other is not
+    released by force or drift: the predicted force uses servo targets solved before the touchdown.
     """
 
     def __init__(
@@ -174,9 +177,11 @@ class ContactModeMonitor:
         d_off: float = 0.003,
         lead: float | None = None,
         rate_ticks: int = 1,
+        settle_ticks: int = 0,
     ):
         self.m = model
         self.tilt_on, self.rate_on, self.lead, self.rate_ticks = tilt_on, rate_on, lead, rate_ticks
+        self.settle_ticks = settle_ticks
         self.h_air, self.h_land = h_air, h_land
         self.f_off, self.f_on, self.d_off = f_off, f_on, d_off
 
@@ -186,6 +191,7 @@ class ContactModeMonitor:
         self.tilt0 = np.zeros((2, 2))
         self.modes = ["flat", "flat"]
         self.landed = [False, False]
+        self._since_landed = [self.settle_ticks, self.settle_ticks]
         self._rate_edge: list[tuple[str | None, int]] = [(None, 0), (None, 0)]
 
     def calibrate(self, q_meas: np.ndarray):
@@ -238,6 +244,7 @@ class ContactModeMonitor:
 
         changed = [a != b for a, b in zip(new, self.modes)]
         self.landed = [a == "air" and b != "air" for a, b in zip(self.modes, new)]
+        self._since_landed = [0 if lnd else n + 1 for lnd, n in zip(self.landed, self._since_landed)]
         self.modes = new
         return new, changed
 
@@ -260,6 +267,7 @@ class ContactModeMonitor:
             if np.linalg.norm(drift) > self.d_off:
                 off = [int(np.argmin(fz))]
 
+        off = [i for i in off if self._since_landed[1 - i] >= self.settle_ticks]
         if len(off) == len(contact):
             off = []
         for i in off:

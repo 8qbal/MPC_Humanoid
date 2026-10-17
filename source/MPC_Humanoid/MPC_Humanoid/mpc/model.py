@@ -236,6 +236,8 @@ class RigidContactModel:
             T[m.joints[m.getJointId(n)].idx_v, iq] = g
         M0 = T.T @ Mfull @ T + Gj.T @ np.diag(self.armature) @ Gj
         Minv = np.linalg.inv(M0)
+        # centroidal angular momentum per model velocity (world axes, about the CoM), frozen like M0
+        self.Ag = pin.computeCentroidalMap(m, data, qn)[3:] @ T
 
         tj = m.getJointId("torso_pitch_joint")
         c_torso = p[tj] + R[tj] @ ca.DM(m.inertias[tj].lever)

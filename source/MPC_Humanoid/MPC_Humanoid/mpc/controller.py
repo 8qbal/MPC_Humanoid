@@ -82,6 +82,11 @@ RESTART_STAGGER = 0.01  # m between the soles along x from which the leading foo
 ALIP_AT, ALIP_RATE, ALIP_GAIN, ALIP_MAX, ALIP_V_MIN = 0.5, 0.7, 0.5, 0.05, 0.01
 # The first two steps start from standing (lateral du -21 mm against -33 mm later): not learned
 ALIP_LEARN_FROM = 2
+# du offsets per swing progress, for a du away from ALIP_AT: the sagittal ratio fell from 1.2 s at 0.5 to 0.5 s at 0.7
+# and the lateral offset from +-30 to +-25 mm; step-to-step spread <= 5 mm (steady) and 13 mm (ramps) from 0.4 to 0.9,
+# 30-50 mm before 0.3 (0.05 and 0.1 m/s, docs/stage3.md). A du further than ALIP_OUTLIER [m] from its offset (a push)
+# is not learned.
+ALIP_BINS, ALIP_OUTLIER = (0.4, 0.5, 0.6, 0.7, 0.8, 0.9), 0.03
 
 
 def _wrap(a: float) -> float:
@@ -187,7 +192,10 @@ class RobonionController:
         self._lift_step = [None, None]
         self._soles = None
         self._alip_ref = None  # (step, plan before its ALIP foothold)
-        self._alip_offset = [None, None, None]  # learned du: lateral per swing foot, sagittal per plan velocity
+        # learned du per progress bin: lateral per swing foot, sagittal per plan velocity
+        self._alip_table = {s: [None, None, None] for s in ALIP_BINS}
+        self._alip_offset = self._alip_table[ALIP_AT]
+        self._alip_learned = (None, set())  # (step, bins learned in it)
         self._alip_held = False  # held or recovering since the last touchdown
         self._airborne: set[int] = set()
         self.state = State.STEP
@@ -345,6 +353,7 @@ class RobonionController:
         self._ctrl_modes = list(modes)
         if self.params.alip and self.state == State.STEP:
             self._alip(t, q, qd)
+            self._learn_offsets(t, q, qd)
 
         self._retime(t, modes)
         planned = self.plan.modes(t)
@@ -472,6 +481,27 @@ class RobonionController:
             if abs(v) > ALIP_V_MIN:
                 off[2] = du[0] / v if off[2] is None else off[2] + ALIP_RATE * (du[0] / v - off[2])
         self._move_foothold(t, ph, plan, fb)
+
+    def _learn_offsets(self, t, q, qd):
+        """du offsets of the bins other than ALIP_AT (learned in _alip), once per step as the swing passes them."""
+        ph = self.plan.phase(t)
+        k = ph.step
+        if k is None or k < ALIP_LEARN_FROM or self._alip_held:
+            return
+        if self._alip_learned[0] != k:
+            self._alip_learned = (k, set())
+        prog = (t - ph.t0) / ph.t_nom
+        due = [b for b in ALIP_BINS if b != ALIP_AT and b <= prog < b + 0.1 and b not in self._alip_learned[1]]
+        if not due:
+            return
+        self._alip_learned[1].add(due[0])
+        ref = self._alip_ref[1] if self._alip_ref is not None and self._alip_ref[0] == k else self.plan
+        du, v = self._alip_du(t, q, qd, ref, ph)
+        off, i = self._alip_table[due[0]], ph.swing
+        if off[i] is None or abs(du[1] - off[i]) < ALIP_OUTLIER:
+            off[i] = du[1] if off[i] is None else off[i] + ALIP_RATE * (du[1] - off[i])
+        if abs(v) > ALIP_V_MIN and (off[2] is None or abs(du[0] - off[2] * v) < ALIP_OUTLIER):
+            off[2] = du[0] / v if off[2] is None else off[2] + ALIP_RATE * (du[0] / v - off[2])
 
     def _alip_du(self, t, q, qd, plan, ph):
         """ALIP step change du about the reference of plan, and the plan's sagittal CoM velocity."""

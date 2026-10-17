@@ -70,7 +70,9 @@ ARM_RANGE_DEG = np.array([30, 20, 30, 30] * 2, dtype=float)  # shoulder pitch, r
 
 # Cost weights. W_U = 0.1 lets the CoM move to the sole centre: better against backward pushes
 # (the weakest direction) than W_U = 10, which holds the pose and is better against forward pushes.
-W_DCM, W_COMD, W_TORSO, W_U, W_RATE = 100.0, 5.0, 10.0, 0.1, 0.5
+# At W_DCM = 100 the servo-rate cost kept the planned DCM 19 mm (RMS) behind the walking reference at 0.1 m/s;
+# 1000 halves it and the walking holds, at the cost of longer holds after in-place backward pushes.
+W_DCM, W_COMD, W_TORSO, W_U, W_RATE = 1000.0, 5.0, 10.0, 0.1, 0.5
 W_SQUEEZE, W_TILT, W_TERM = 1e-4, 1e3, 1e3
 # The leg-length and pelvis terms keep the NMPC from folding a knee or rolling the pelvis: at the
 # straight-leg pose a knee bend is nearly invisible to the linearised contact model.

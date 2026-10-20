@@ -182,7 +182,17 @@ walking. Working notes and every result: `docs/stage3.md` (local, git-ignored); 
   two hold 5-8 s), slip without push 3-4 mm per 10 steps (was ≤ 1.5 mm). Bisect and diagnosis in
   `docs/stage3.md`.
 - Walking: straight walking at a commanded speed with an ALIP footstep planner (user decision
-  2026-10-09). Designed in `docs/stage3.md`, not started; next after the whole-body port.
+  2026-10-09), built on `feat/movement-gait` (9a50d8f, 2cfe9f8, ad56ba0; `--vx`, `--alip`, `--ramp_steps` in
+  `run_stepping.py`). `mpc/alip.py` gives the step change du about the plan; the controller removes a learned
+  offset per swing foot (`ALIP_BINS` per swing progress) and uses du as step-to-step feedback. After a hold it
+  restarts with a new plan from the current soles.
+  - `W_DCM = 1000` (was 100, ad56ba0): at 100 the servo-rate cost kept the planned DCM 19 mm RMS behind the walking
+    reference. Battery of 51 runs: falls 1/51 (was 2/51), no holds walking without push, holds after walking pushes
+    halved; in-place x-1.0 now holds up to 7.3 s (no fall).
+  - Speed limit 0.15 m/s (user, 2026-10-18): clean on 6/6 runs. At 0.2 m/s 3/6 stop and restart, at 0.25 m/s
+    holds and one fall: the soles roll to an edge at weight transfer and in single support. Tracking harder
+    (runtime weights) made it worse.
+  - Capture steps (a step adapted to a push within the current swing) were tried twice and reverted.
 - The user dropped the Jetson AGX Orin tick benchmark (the Jetson is assumed to keep up).
 - Later:
   - a hardware check of the contact-mode monitor and the estimator, whose thresholds (0.2 deg,

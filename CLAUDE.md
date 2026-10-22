@@ -184,7 +184,7 @@ push the gait holds and restarts (no recovery step). Next proposed: servo identi
   two hold 5-8 s), slip without push 3-4 mm per 10 steps (was ≤ 1.5 mm). Bisect and diagnosis in
   `docs/stage3.md`.
 - Walking: straight walking at a commanded speed with an ALIP footstep planner (user decision
-  2026-10-09), built on `feat/movement-gait` (9a50d8f, 2cfe9f8, ad56ba0; `--vx`, `--alip`, `--ramp_steps` in
+  2026-10-09), built on `feat/movement-gait` (9a50d8f, 2cfe9f8, ad56ba0; `--vx`, `--ramp_steps` in
   `run_stepping.py`). `mpc/alip.py` gives the step change du about the plan; the controller removes a learned
   offset per swing foot (`ALIP_BINS` per swing progress) and uses du as step-to-step feedback. After a hold it
   restarts with a new plan from the current soles.

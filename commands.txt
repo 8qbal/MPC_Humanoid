@@ -49,14 +49,13 @@ uv run python scripts/run_stepping.py --viz kit            # with the Isaac Sim 
 uv run python scripts/run_stepping.py --steps 40 --seed 1  # 40 steps, sensor-noise seed 1
 
 # Straight walking (speed limit 0.15 m/s)
-uv run python scripts/run_stepping.py --steps 12 --vx 0.1            # nominal footholds
-uv run python scripts/run_stepping.py --steps 12 --vx 0.1 --alip     # ALIP footholds
-uv run python scripts/run_stepping.py --steps 12 --vx 0.15 --alip --ramp_steps 2
+uv run python scripts/run_stepping.py --steps 12 --vx 0.1            # footholds from the ALIP planner
+uv run python scripts/run_stepping.py --steps 20 --vx 0.15 --ramp_steps 2
 
 # Pushes (axis + impulse in N*s), one per run
 uv run python scripts/run_stepping.py --push x+1.75                  # in place, mid single support
 uv run python scripts/run_stepping.py --push y-0.5 --push_at ds      # during double support
-uv run python scripts/run_stepping.py --steps 12 --vx 0.05 --alip --push y+1.0
+uv run python scripts/run_stepping.py --steps 12 --vx 0.05 --push y+1.0
 
 # Gait options
 #   --clearance 0.02   sole lift [m]      --t_ss 0.30  single support [s]   --t_ds 0.20  double support [s]

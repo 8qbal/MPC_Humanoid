@@ -321,7 +321,7 @@ class RobonionController:
         self._mid = feet_xy.mean(0)
         self._lift_xy = feet_xy.copy()
         self._u_lift = [None, None]
-        self._walking = self.params.vx != 0.0 or self.params.alip
+        self._walking = self.params.vx != 0.0
 
         com = np.array(self.model.f_com(q_stand)).ravel()
         self._com0 = com[:2]
@@ -351,7 +351,7 @@ class RobonionController:
                 self._lift_step[i] = None
                 self._alip_held = False
         self._ctrl_modes = list(modes)
-        if self.params.alip and self.state == State.STEP:
+        if self._walking and self.state == State.STEP:
             self._alip(t, q, qd)
             self._learn_offsets(t, q, qd)
 

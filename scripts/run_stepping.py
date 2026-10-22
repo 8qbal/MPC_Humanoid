@@ -17,7 +17,7 @@ Usage:
     uv run python scripts/run_stepping.py --record run.npz           # inputs for scripts/benchmark_stepping.py
     uv run python scripts/run_stepping.py --trace trace.npz          # estimator state and simulator truth (stage 3)
     uv run python scripts/run_stepping.py --no_arms --no_hip_yaw     # arm and hip yaw targets held at the default
-    uv run python scripts/run_stepping.py --steps 20 --vx 0.1 --alip # walk forward at 0.1 m/s, ALIP footholds
+    uv run python scripts/run_stepping.py --steps 20 --vx 0.1        # walk forward at 0.1 m/s (ALIP footholds)
 """
 
 import argparse
@@ -30,7 +30,6 @@ parser.add_argument("--clearance", type=float, default=0.02, help="[m] peak sole
 parser.add_argument("--t_ss", type=float, default=0.30, help="[s] single support")
 parser.add_argument("--t_ds", type=float, default=0.20, help="[s] double support")
 parser.add_argument("--vx", type=float, default=0.0, help="[m/s] forward walking speed (0: stepping in place)")
-parser.add_argument("--alip", action="store_true", help="footholds from the ALIP planner")
 parser.add_argument("--ramp_steps", type=int, default=2, help="steps to reach --vx and to stop")
 parser.add_argument("--push", default=None, help="axis and impulse [N*s], e.g. x+1.75 or y-1.0")
 parser.add_argument("--push_at", default="mid_ss", choices=("mid_ss", "ds"))
@@ -137,7 +136,6 @@ def main() -> None:
         n_steps=args.steps,
         vx=args.vx,
         ramp_steps=args.ramp_steps,
-        alip=args.alip,
     )
     controller = RobonionController(
         act_names, q_default_act, env.step_dt, params, arms=not args.no_arms, hip_yaw=not args.no_hip_yaw

@@ -35,7 +35,6 @@ class GaitParams:
     v_descent: float = 0.1  # m/s, sole-centre descent once single support lasts longer than planned
     vx: float = 0.0  # m/s, commanded forward speed
     ramp_steps: int = 2  # steps to reach vx at the start and to stop at the end
-    alip: bool = False  # footholds from the ALIP planner (alip.py) instead of the nominal ones
 
 
 @dataclass

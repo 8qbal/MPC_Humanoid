@@ -48,7 +48,7 @@ Stages, each built on the previous one:
    - base x, y, z from an EKF fusing IMU and leg kinematics (Bloesch et al. 2012) instead of pinning the feet in contact;
    - pelvis yaw, hip yaw and the 8 arm joints in the NMPC, for balance and yaw damping (added 2026-10-07);
    - straight walking at a commanded speed, with footsteps from an ALIP footstep planner (added 2026-10-09).
-4. **Fast walking** -- 0.3--0.4 m/s and turning. Whether footsteps and step timing also become MPC decision variables is not decided yet.
+4. **Fast walking** -- 0.3--0.4 m/s and turning. Whether footsteps and step timing also become MPC decision variables is not decided yet.  Content not decided yet (2026-10-22): stage 3 ended at 0.15 m/s, limited by the soles rolling to an edge, and the servos are not identified yet.
 5. **Naturalness tuning**.
 6. *Maybe:* **stochastic MPC** -- chance-constrained or tube MPC on top of the same QP for noise and disturbance robustness.
 
@@ -69,9 +69,9 @@ Never worse than the passive robot, better in two to three cases; larger pushes 
 
 Full record: [`docs/stage2.md`](stage2.md).  One layer: the rigid-contact NMPC with a contact plan from a gait scheduler (T_ss 0.3 s, T_ds 0.1 s, 2 cm clearance, 0.2 rad crouch), a closed-form DCM reference and a swing spline as cost references (`mpc/gait.py`, `mpc/nmpc.py` `RobonionNMPC`, `mpc/controller.py` `RobonionController`, built by `scripts/build_controller.py`, run by `scripts/run_stepping.py`).  In Isaac, with the estimator only: 20 steps at 2 and 3 cm without a fall; early and late touchdowns retime the plan (±5 mm of ground-height error handled); one tick ≈ 4.3 ms on the desktop (compiled contact algebra and estimation, split RTI, 16 nodes), measurement-to-target latency ≈ 1.3 ms.  Pushes in the middle of single support (3 noise seeds): stepping resumes after +1.75 / −1.0 N·s sagittal (−1.75 in 2 of 3) and ±0.5 / +1.0 N·s lateral; lateral push recovery needs footstep adaptation (stage 4).  Open: Jetson timing, hardware check of the contact-mode monitor, ≈ 0.3 mm forward landing drift per step.
 
-### Stage 3: base position estimation, whole body, walking (set 2026-10-04, widened 2026-10-07 and 2026-10-09; in progress)
+### Stage 3 status: done (base position estimation, whole body, walking; set 2026-10-04, widened 2026-10-07 and 2026-10-09, closed by the user 2026-10-22)
 
-Working notes and every result: `docs/stage3.md` (local, git-ignored).  State on 2026-10-18:
+Working notes and every result: `docs/stage3.md` (local, git-ignored).  Closed on 2026-10-22 with these results in Isaac (seeds 0-2, commit 735cf79): 40 steps in place without a hold; straight walking clean up to 0.15 m/s (the accepted limit); pushes of ±1.0 N·s while walking fall in 1 of 24 runs at 0.05 m/s and 1 of 24 at 0.1 m/s.  Accepted limits: after a push the gait holds and restarts (no recovery step; two capture-step attempts were reverted); 0.2 m/s and above roll the soles to an edge; the servo parameters are still BAM priors.  State on 2026-10-18:
 - **EKF:** in the controller (`mpc/ekf.py`, `LegKinematicsEkf`). Its leg kinematics are compiled with CasADi.
 - **Tick time:** the NMPC runs every second tick (100 Hz). The tick stays 5 ms, and estimation, contact monitor and gait rules stay at 200 Hz. 50 Hz was tried and rejected (falls, slip).
 - **Whole body:** pelvis yaw, hip yaw and the 8 arm joints are in the NMPC (merged 2026-10-10).

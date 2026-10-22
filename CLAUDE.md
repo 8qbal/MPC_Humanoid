@@ -147,8 +147,10 @@ and every active mode (balancing, stepping) runs at the crouched pose. Its code 
 `stage2`; its results stay in `docs/stage1.md` as a record.
 
 **Project state (stage 2 closed by the user on 2026-09-26; stage 3 set on 2026-10-04, widened
-2026-10-07 and 2026-10-09).** Stage 3 is base position estimation, the whole body in the NMPC, and
-walking. Working notes and every result: `docs/stage3.md` (local, git-ignored); the summary is in
+2026-10-07 and 2026-10-09, closed by the user on 2026-10-22; stage 4 not decided yet).** Stage 3 is base
+position estimation, the whole body in the NMPC, and walking. Closed with: 40 steps in place clean, straight
+walking clean up to 0.15 m/s, ±1.0 N·s pushes while walking fall in 1 of 24 runs at 0.05 and at 0.1 m/s; after a
+push the gait holds and restarts (no recovery step). Next proposed: servo identification before fast walking. Working notes and every result: `docs/stage3.md` (local, git-ignored); the summary is in
 `docs/PLAN.md`, *Stage 3*. Branch `feat/movement-gait`.
 - Estimation:
   - The supervisor rejected the stage-2 base x, y, z: `ContactProjectionEstimator` pins the contact

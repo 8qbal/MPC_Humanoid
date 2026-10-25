@@ -251,7 +251,9 @@ class RobonionController:
         meas = (joints, *roll_pitch(R_base), joints_d, roll_d, pitch_d, yaw, yaw_d)
         if any(changed):
             self._cfg = self.model.contact_config(*modes)
-            self._cref = self.model.update_refs(self._cref, self.estimator.q, self._cfg[1], changed)
+            # before the first estimate the references from _start stand
+            if self.estimator.q is not None:
+                self._cref = self.model.update_refs(self._cref, self.estimator.q, self._cfg[1], changed)
         q, qd = self._estimate(meas)
 
         wrench = np.array(self.model.f_wrench(q, qd, self.u, self._cfg[0], self._cref, self._cfg[1], np.zeros(3)))

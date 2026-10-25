@@ -251,10 +251,14 @@ def main() -> None:
 
     if ticks:
         tk = np.array(ticks) * 1000
+        solve = (
+            f"NMPC solve mean/max {np.mean(solve_times) * 1000:.2f}/{np.max(solve_times) * 1000:.2f} ms"
+            if solve_times
+            else "NMPC never solved"
+        )
         print(
             f"controller tick (estimation + NMPC) mean/p95/max {tk.mean():.2f}/{np.percentile(tk, 95):.2f}/"
-            f"{tk.max():.2f} ms; NMPC solve mean/max {np.mean(solve_times) * 1000:.2f}/"
-            f"{np.max(solve_times) * 1000:.2f} ms, QP failures {qp_failures}, QP iteration limit {qp_iter_limit}, "
+            f"{tk.max():.2f} ms; {solve}, QP failures {qp_failures}, QP iteration limit {qp_iter_limit}, "
             f"NaN resets {controller.nmpc.nan_resets}"
         )
 

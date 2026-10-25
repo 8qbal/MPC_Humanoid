@@ -57,7 +57,7 @@ uv run python scripts/run_env.py --viz kit                    # load the Robonio
 uv run python scripts/build_controller.py                     # build the controller (C functions + acados solver), no Isaac
 uv run python scripts/run_stepping.py --steps 20                # stage-2 stepping in place (crouch, calibrate, step)
 uv run python scripts/run_stepping.py --push x+1.75            # one push mid single support while stepping
-uv run python scripts/run_stepping_nocalib.py --viz kit        # same, spawned crouched, no AHRS calibration
+uv run python scripts/run_stepping_nocalib.py --viz kit        # spawned crouched, no AHRS calibration (holds: bias > 0.2 deg)
 ```
 
 `physics=<PRESET>` selects one of the physics presets defined per task (e.g. the
@@ -91,7 +91,7 @@ source/MPC_Humanoid/MPC_Humanoid/   installable package: robot config, env, mpc,
 assets/                             USD assets (robonionv2.usd) + controller URDF (robonionv2_controller.urdf)
 references/                         URDF, CAD-derived docs, git submodules (IK, RL refs)
 scripts/                            run_env.py (load + play the env), build_controller.py (build the controller, no Isaac),
-                                    run_stepping.py (stepping in place + push), run_stepping_nocalib.py (same, spawned
+                                    run_stepping.py (stepping in place, walking, pushes), run_stepping_nocalib.py (spawned
                                     crouched, no AHRS calibration), benchmark_stepping.py (replay a recorded run, no Isaac)
 tools/asset/                        URDF -> USD pipeline scripts (fix, flatten, check), controller URDF export
 outputs/                            scratch (git-ignored): acados build, stage-1/2 prototypes, validation scripts/data
@@ -125,12 +125,10 @@ project source to hand-edit, except where noted below.
   the base class, so any env cfg here must define both.
 - `mpc/` — the controller stack (model, estimator, NMPC, gait plan, controller; see
   *Controller* below). Kept independent of `tasks/` — it's a plain module, not an RL task.
-- `tasks/mpc_humanoid/` — Isaac Lab's generated RL-task tree (gym-registered,
-  manager-based, `config/<variant>/` + shared `mdp/`). Currently only holds the
-  generated cart-pole placeholder task (`config/cartpole/`); keep it isolated until a real Robonion RL/benchmark task is registered here, then
-  retire it so it can't be run by accident as the humanoid task. **Don't put the MPC
-  controller or its non-RL env here** — this tree is specifically for gym-registered
-  RL tasks with reward/termination managers.
+- `tasks/` — entry point for gym-registered Isaac Lab RL tasks (`import_packages` in `tasks/__init__.py`,
+  `isaaclab.tasks` entry point in `pyproject.toml`). Empty: the generated cart-pole placeholder was removed on
+  2026-10-22. **Don't put the MPC controller or its non-RL env here** — this tree is specifically for
+  gym-registered RL tasks with reward/termination managers.
 
 Never conflate `robots/` (asset + actuator config) with the USD asset's raw
 inertial/collision data — `robonionv2.py` deliberately keeps them separate.
@@ -198,7 +196,7 @@ push the gait holds and restarts (no recovery step). Next proposed: servo identi
 - The user dropped the Jetson AGX Orin tick benchmark (the Jetson is assumed to keep up).
 - Later:
   - a hardware check of the contact-mode monitor and the estimator, whose thresholds (0.2 deg,
-    15 ms lead, 2 ticks) were tuned in Isaac only;
+    15 ms lead, 3 ticks) were tuned in Isaac only;
   - stage 4: fast walking and turning.
 
 Known issues from stage 2, listed under *Open* in `docs/stage2.md`:

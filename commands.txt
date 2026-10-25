@@ -64,7 +64,8 @@ uv run python scripts/run_stepping.py --steps 12 --vx 0.05 --push y+1.0
 #   --trace trace.npz   estimator state + simulator truth per tick
 #   --record run.npz    controller inputs/outputs per tick (for the benchmark below)
 
-# Same, spawned already crouched, no AHRS calibration
+# Spawned already crouched, no AHRS calibration. The AHRS bias (e.g. 0.47 deg) exceeds the 0.2 deg monitor
+# threshold, so the gait holds from the start: it shows the calibration is needed.
 uv run python scripts/run_stepping_nocalib.py --viz kit
 uv run python scripts/run_stepping_nocalib.py --steps 20 --seed 1
 
@@ -81,7 +82,7 @@ uv run python scripts/build_controller.py                  # on the target machi
 uv run python scripts/benchmark_stepping.py run.npz --repeat 3
 
 =====================================================================
-6. Isaac Lab RL tooling (placeholder cart-pole task only, no Robonion RL task yet)
+6. Isaac Lab RL tooling (no task registered yet)
 =====================================================================
 uv run isaaclab zero_agent --task <TASK_NAME> --num_envs 16
 uv run isaaclab random_agent --task <TASK_NAME> --num_envs 16

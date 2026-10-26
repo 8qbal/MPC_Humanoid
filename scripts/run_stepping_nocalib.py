@@ -47,8 +47,8 @@ class CrouchedEnvCfg(MpcHumanoidRobonionEnvCfg):
 
 
 class UncalibratedController(controller.RobonionController):
-    def _start(self):
-        super()._start()
+    def _start(self, *args):
+        super()._start(*args)
         print(
             "AHRS bias left in (roll, pitch): "
             f"{np.round(np.degrees(self._bias), 3)} deg, first-tick estimate; run_stepping.py removes it"

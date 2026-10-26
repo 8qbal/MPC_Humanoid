@@ -1,21 +1,95 @@
 # Ref for mpc model builder and the isaac sim
 
-# Motor limits from references/robinion_description/robinion2.urdf, except the right front thigh: one XH540-W270 like
-# every leg joint (9.9 N·m stall at 12 V), so 9.9 as on the left (URDF has 19.8 on the right; user decision)
-URDF_LIMITS = {  # key <-> value: (effort [N·m], velocity [rad/s])
-    "yaw": (4.1, 4.82),  # hip yaw, elbow yaw, head yaw
-    "torso_arms": (10.6, 3.14),  # torso pitch, shoulder pitch/roll, elbow pitch
-    "legs": (9.9, 4.08),  # hip roll, front thigh pitch, ankle pitch/roll
-}
-URDF_FRICTION = 0.0  # N·m
+from __future__ import annotations
 
-# Values not defined in the URDF come from the servo datasheets (use 11.1 V for the meantime)
-XH540_STIFFNESS = 42.0  # N·m/rad
-XH430_STIFFNESS = 16.6  # N·m/rad
-XH540_DAMPING = 2.4  # N·m·s/rad, 9.2 N·m / 3.77 rad/s
-XH430_DAMPING = 1.1  # N·m·s/rad, 3.1 N·m / 2.83 rad/s
-XH540_ARMATURE = 0.003
-XH430_ARMATURE = 0.002
+import re
+from typing import NamedTuple
+
+
+class Servo(NamedTuple):
+    effort: float  # N·m
+    velocity: float  # rad/s
+    stiffness: float  # N·m/rad
+    damping: float  # N·m·s/rad
+    armature: float  # kg·m²
+    friction: float  # N·m, Coulomb
+
+
+# From references/robinion_description/config/actuators.yaml (upstream 55ac2c2), at 14.8 V: effort, velocity = stall
+# torque and no-load speed (ROBOTIS e-Manual); damping = back-EMF (stall / no-load) + gearbox viscous; armature and
+# friction = priors from BAM identifications of MX servos, until the servos are identified.
+# stiffness: stall torque / 0.217 rad, the position error where the default P gain saturates the PWM
+# (references/docs/joint_info.md).
+SERVOS = {
+    "XH540-W270": Servo(11.7, 4.817, 11.7 / 0.217, 2.429 + 0.035, 0.038, 0.10),
+    "XM540-W270": Servo(12.9, 3.875, 12.9 / 0.217, 3.329 + 0.035, 0.038, 0.10),
+    "XM430-W350": Servo(4.8, 5.969, 4.8 / 0.217, 0.804 + 0.012, 0.038, 0.09),
+}
+
+# servo -> {joint-name regex: number of servos driving the joint in parallel}, as in actuators.yaml (user, 2026-10-15)
+SERVO_JOINTS = {
+    "XH540-W270": {
+        ".*_hip_roll_joint": 1,
+        ".*_front_thigh_pitch_joint": 2,
+        ".*_knee_pitch_joint": 2,
+        ".*_front_shin_pitch_joint": 1,
+        ".*_ankle_pitch_joint": 1,
+        ".*_ankle_roll_joint": 1,
+    },
+    "XM540-W270": {
+        ".*_hip_yaw_joint": 1,
+        "torso_pitch_joint": 1,
+        ".*_shoulder_pitch_joint": 1,
+        ".*_shoulder_roll_joint": 1,
+        ".*_elbow_pitch_joint": 1,
+    },
+    "XM430-W350": {".*_elbow_yaw_joint": 1, "head_yaw_joint": 1, "head_pitch_joint": 1},
+}
+
+# Parallelogram (4-bar) joints that follow an independent joint: suffix -> (independent joint suffix, gain).
+# knee and front shin carry servos; back thigh and back shin are bare bars.
+PASSIVE_COUPLING = {
+    "knee_pitch_joint": ("front_thigh_pitch_joint", -1.0),
+    "back_thigh_pitch_joint": ("front_thigh_pitch_joint", 1.0),
+    "front_shin_pitch_joint": ("ankle_pitch_joint", -1.0),
+    "back_shin_pitch_joint": ("ankle_pitch_joint", -1.0),
+}
+
+
+def scaled(servo: Servo, count: int) -> Servo:
+    fields = ("effort", "stiffness", "damping", "armature", "friction")
+    return servo._replace(**{f: getattr(servo, f) * count for f in fields})
+
+
+def servo_of(joint: str) -> Servo | None:
+    """The servos on one joint (parallel servos summed); None for a joint without a servo."""
+    for name, patterns in SERVO_JOINTS.items():
+        for pattern, count in patterns.items():
+            if re.fullmatch(pattern, joint):
+                return scaled(SERVOS[name], count)
+    return None
+
+
+def drive_of(joint: str) -> Servo:
+    """The servos acting on an independent joint's coordinate: its own plus those on the parallelogram joints that
+    follow it (a follower at gain g adds g² to stiffness, damping and armature, |g| to effort and friction)."""
+    s = servo_of(joint)
+    if s is None:
+        raise KeyError(f"no servo for joint {joint}")
+    side = joint.split("_", 1)[0]
+    for follower, (lead, g) in PASSIVE_COUPLING.items():
+        f = servo_of(f"{side}_{follower}")
+        if joint == f"{side}_{lead}" and f is not None:
+            s = Servo(
+                s.effort + abs(g) * f.effort,
+                min(s.velocity, f.velocity),
+                s.stiffness + g * g * f.stiffness,
+                s.damping + g * g * f.damping,
+                s.armature + g * g * f.armature,
+                s.friction + abs(g) * f.friction,
+            )
+    return s
+
 
 # 0 = straight legs; > 0 crouches
 LEG_CROUCH = 0.0  # rad

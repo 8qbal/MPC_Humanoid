@@ -139,8 +139,9 @@ adaptation. Known issues, all listed under *Open* in `docs/stage2.md`:
   split (`prepare` / `feedback`), 16 nodes over 0.5 s. Cost weights are hardcoded constants
   by user decision (no config); `W_U = 0.1` was chosen over 10; swing weight 1e6 (1e4 barely
   lifted the foot); non-uniform node grids broke the tuning.
-- `gait.py`: `GaitPlan` — contact schedule (T_ss 0.3 s, T_ds 0.1 s, clearance 2 cm; user
-  decision, chosen against the 1.1 and 1.5-1.7 Hz modes and the servo rate limit), closed-form
+- `gait.py`: `GaitPlan` — contact schedule (T_ss 0.3 s, T_ds 0.2 s, clearance 2 cm; user
+  decisions: 0.3/0.1 s chosen against the 1.1 and 1.5-1.7 Hz modes and the servo rate limit, T_ds 0.2 s since
+  2026-10-15 because 0.1 s slid the soles apart at weight transfer with the 0.038 armature), closed-form
   DCM/CoM reference, swing-sole spline, `stretch()` for retiming.
 - `controller.py`: `RobonionController` — crouch ramp (0.2 rad; straight legs are singular and
   too slow for the swing), AHRS calibration, then the gait. `nominal_pose()` gives the crouched
@@ -149,8 +150,9 @@ adaptation. Known issues, all listed under *Open* in `docs/stage2.md`:
   support, hold + plan pause + posture reset + standing recovery in double support) are each
   justified by an Isaac failure in `docs/stage2.md`, and run as a state machine (`State`: STEP,
   HOLD, RESET, CATCH, RECOVER). Edge detection while stepping uses the predicted tilt
-  (`MONITOR_LEAD` 15 ms: tilt + lead · rate beyond 0.2°) on 2 consecutive ticks
-  (`MONITOR_TICKS`; a touchdown impact reads 12-19 deg/s for one tick). The asset runs with 0
+  (`MONITOR_LEAD` 15 ms: tilt + lead · rate beyond 0.2°) on 3 consecutive ticks
+  (`MONITOR_TICKS`; a touchdown impact reads 12-19 deg/s for one tick, and with the 0.038 armature the
+  0.1-0.15° sole wobble after touchdown lasts 2 ticks). The asset runs with 0
   PhysX TGS velocity iterations (`robonionv2.py`): with 4, a flat sole read up to 3.6 deg/s of
   false tilt rate.
 - Build: `scripts/build_controller.py` (no Isaac) generates and compiles the C functions, the
@@ -188,7 +190,7 @@ adaptation. Known issues, all listed under *Open* in `docs/stage2.md`:
 ## The URDF → USD pipeline (assets/robonionv2.usd)
 
 This is the asset `Robonion_CFG` in `robots/robonionv2.py` loads. It is derived
-from `references/robinion_description/robinion2.urdf` by a converter that only
+from `references/robinion_description/urdf/robinion2.urdf` by a converter that only
 understands trees, so a fixed set of physics facts (parallelogram loop joints,
 floating base, foot inertia, etc.) must be re-authored by hand after every
 conversion. **Read `references/docs/joint_info.md` in full before touching this
@@ -197,7 +199,7 @@ known defects in the URDF, and the exact pipeline below. Do not regenerate or
 hand-edit `assets/robonionv2.usd` without reading it first.
 
 ```bash
-uv run urdf_usd_converter references/robinion_description/robinion2.urdf assets/robonionv2 \
+uv run urdf_usd_converter references/robinion_description/urdf/robinion2.urdf assets/robonionv2 \
     -p robinion_description=$PWD/references/robinion_description   # 1. URDF -> raw USD
 uv run python tools/asset/fix_robinion_usd.py assets/robonionv2/robinion.usda  # 2. hand-made physics fixes
 uv run python tools/asset/flatten_usd.py assets/robonionv2/robinion.usda assets/robonionv2.usd  # 3. standalone asset
@@ -219,15 +221,18 @@ Rules when working on this pipeline:
 
 ## When editing robot/task config
 
-- `robots/robonionv2.py` deliberately keeps the actuator model (stiffness/damping/
-  armature, estimated from the Dynamixel XH540-W270/XH430-W350 datasheets; effort/velocity limits
-  taken verbatim from the URDF, which the user confirmed correct) separate from the
-  USD asset's raw inertial/collision data — don't fold one into the other.
-- The 4 parallelogram-passive joints (`*_knee_pitch_joint`, `*_back_thigh_pitch_joint`,
-  `*_front_shin_pitch_joint`, `*_back_shin_pitch_joint`) are unmotored by design
-  (`ImplicitActuatorCfg` with zero stiffness/damping/effort) — do not add a drive to
-  them without confirming with the user first; see *Leg mechanism* in
-  `joint_info.md` for why they are mechanically constrained, not free.
+- `robots/robonionv2.py` deliberately keeps the actuator model separate from the USD asset's raw
+  inertial/collision data — don't fold one into the other. The actuator model is one `DCMotorCfg`
+  per servo type and servo count, from `SERVOS` / `SERVO_JOINTS` in `robots/robonion_params.py`, which follow
+  the upstream URDF and `config/actuators.yaml` (user, 2026-10-15): XH540-W270 on hip roll, front thigh (2
+  servos), knee (2), front shin, ankle pitch and ankle roll; XM540-W270 on hip yaw, torso pitch, shoulders and
+  elbow pitch; XM430-W350 on elbow yaw and the head. 14.8 V figures, K = stall / 0.217 rad, armature and
+  friction BAM priors until the servos are identified. `mpc/model.py` and `mpc/nmpc.py` take the same values.
+- Knee and front shin carry servos (user, 2026-10-15, superseding "5 motors per leg"); their targets follow
+  front thigh and ankle pitch through the parallelogram gain (`env/actions.py`, `CoupledJointPositionAction`),
+  so each leg keeps 2 pitch DOF. The back bars (`*_back_thigh_pitch_joint`, `*_back_shin_pitch_joint`) are
+  unpowered (`ImplicitActuatorCfg` with zero stiffness/damping/effort); see *Leg mechanism* in
+  `joint_info.md`.
 
 ## Documentation conventions
 

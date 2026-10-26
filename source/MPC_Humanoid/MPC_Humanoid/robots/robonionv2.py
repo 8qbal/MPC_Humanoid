@@ -8,17 +8,13 @@ import isaaclab.sim as sim_utils
 from isaaclab.actuators import DCMotorCfg, ImplicitActuatorCfg
 from isaaclab.assets import ArticulationCfg
 
-from .robonion_params import (
-    DEFAULT_JOINT_POS,
-    URDF_FRICTION,
-    URDF_LIMITS,
-    XH430_ARMATURE,
-    XH430_DAMPING,
-    XH430_STIFFNESS,
-    XH540_ARMATURE,
-    XH540_DAMPING,
-    XH540_STIFFNESS,
-)
+from .robonion_params import DEFAULT_JOINT_POS, SERVO_JOINTS, SERVOS, scaled
+
+# one actuator group per servo type and number of servos per joint
+_GROUPS: dict[tuple[str, int], list[str]] = {}
+for _name, _joints in SERVO_JOINTS.items():
+    for _pattern, _count in _joints.items():
+        _GROUPS.setdefault((_name, _count), []).append(_pattern)
 
 MPC_HUMANOID_ASSETS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../assets"))
 
@@ -52,78 +48,27 @@ Robonion_CFG = ArticulationCfg(
     ),
     soft_joint_pos_limit_factor=0.9,
     actuators={
-        "yaw": DCMotorCfg(
-            joint_names_expr=[
-                ".*_hip_yaw_joint",
-                ".*_elbow_yaw_joint",
-            ],
-            saturation_effort=URDF_LIMITS["yaw"][0],
-            actuator_effort_limit=URDF_LIMITS["yaw"][0],
-            actuator_velocity_limit=URDF_LIMITS["yaw"][1],
-            joint_effort_limit=URDF_LIMITS["yaw"][0],
-            joint_velocity_limit=URDF_LIMITS["yaw"][1],
-            stiffness=XH540_STIFFNESS,
-            damping=XH540_DAMPING,
-            friction=URDF_FRICTION,
-            armature=XH540_ARMATURE,
-        ),
-        "torso_arms": DCMotorCfg(
-            joint_names_expr=[
-                "torso_pitch_joint",
-                ".*_shoulder_pitch_joint",
-                ".*_shoulder_roll_joint",
-                ".*_elbow_pitch_joint",
-            ],
-            saturation_effort=URDF_LIMITS["torso_arms"][0],
-            actuator_effort_limit=URDF_LIMITS["torso_arms"][0],
-            actuator_velocity_limit=URDF_LIMITS["torso_arms"][1],
-            joint_effort_limit=URDF_LIMITS["torso_arms"][0],
-            joint_velocity_limit=URDF_LIMITS["torso_arms"][1],
-            stiffness=XH540_STIFFNESS,
-            damping=XH540_DAMPING,
-            friction=URDF_FRICTION,
-            armature=XH540_ARMATURE,
-        ),
-        "legs": DCMotorCfg(
-            joint_names_expr=[
-                ".*_hip_roll_joint",
-                ".*_front_thigh_pitch_joint",
-                ".*_ankle_pitch_joint",
-                ".*_ankle_roll_joint",
-            ],
-            saturation_effort=URDF_LIMITS["legs"][0],
-            actuator_effort_limit=URDF_LIMITS["legs"][0],
-            actuator_velocity_limit=URDF_LIMITS["legs"][1],
-            joint_effort_limit=URDF_LIMITS["legs"][0],
-            joint_velocity_limit=URDF_LIMITS["legs"][1],
-            stiffness=XH540_STIFFNESS,
-            damping=XH540_DAMPING,
-            friction=URDF_FRICTION,
-            armature=XH540_ARMATURE,
-        ),
-        "head": DCMotorCfg(
-            joint_names_expr=[
-                "head_yaw_joint",
-                "head_pitch_joint",
-            ],
-            saturation_effort=URDF_LIMITS["yaw"][0],
-            actuator_effort_limit=URDF_LIMITS["yaw"][0],
-            actuator_velocity_limit=URDF_LIMITS["yaw"][1],
-            joint_effort_limit=URDF_LIMITS["yaw"][0],
-            joint_velocity_limit=URDF_LIMITS["yaw"][1],
-            stiffness=XH430_STIFFNESS,
-            damping=XH430_DAMPING,
-            friction=URDF_FRICTION,
-            armature=XH430_ARMATURE,
-        ),
-        # Passive joints in the knee four-bar linkage.
+        # the group name goes into a USD prim name, which cannot hold '-'
+        f"{name.replace('-', '_')}_x{count}": DCMotorCfg(
+            joint_names_expr=patterns,
+            saturation_effort=s.effort,
+            actuator_effort_limit=s.effort,
+            actuator_velocity_limit=s.velocity,
+            joint_effort_limit=s.effort,
+            joint_velocity_limit=s.velocity,
+            stiffness=s.stiffness,
+            damping=s.damping,
+            friction=s.friction,
+            dynamic_friction=s.friction,
+            armature=s.armature,
+        )
+        for (name, count), patterns in _GROUPS.items()
+        for s in [scaled(SERVOS[name], count)]
+    }
+    | {
+        # The back bars of the two parallelograms carry no servo.
         "passive": ImplicitActuatorCfg(
-            joint_names_expr=[
-                ".*_knee_pitch_joint",
-                ".*_back_thigh_pitch_joint",
-                ".*_front_shin_pitch_joint",
-                ".*_back_shin_pitch_joint",
-            ],
+            joint_names_expr=[".*_back_thigh_pitch_joint", ".*_back_shin_pitch_joint"],
             stiffness=0.0,
             damping=0.0,
             joint_effort_limit=0.0,

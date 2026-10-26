@@ -4,7 +4,8 @@ Record the inputs once with Isaac (`scripts/run_stepping.py --record run.npz`), 
 and replay it there: every tick gets the recorded encoder, AHRS, gyro and accelerometer values (as float32, as Isaac
 and the drivers deliver them), so the controller takes the same path as in the recorded run. The replay is open loop;
 on another CPU the targets can differ by rounding, which is reported (the recorded targets are the reference).
-Recordings made before the EKF (stage 3) have no accelerometer and must be recorded again.
+Recordings made before the EKF (stage 3) have no accelerometer and must be recorded again. The arm / hip yaw switches
+of the recording are replayed (all on for recordings without them).
 
 Needs no Isaac Sim / Isaac Lab: numpy, casadi, pinocchio, acados_template and the acados libraries
 (ACADOS_SOURCE_DIR, LD_LIBRARY_PATH). It does not build the controller: run scripts/build_controller.py on the
@@ -34,8 +35,14 @@ def main() -> None:
     t_ss, t_ds, clearance, n_steps = d["params"]
     params = GaitParams(t_ss=float(t_ss), t_ds=float(t_ds), clearance=float(clearance), n_steps=int(n_steps))
     inputs = [d[k].astype(np.float32) for k in ("q_act", "qd_act", "quat", "gyro", "accel")]
+    no_arms, no_hip_yaw = (bool(x) for x in d["locked"]) if "locked" in d else (False, False)
     controller = RobonionController(
-        list(d["act_names"]), d["q_default_act"].astype(np.float32), float(d["step_dt"]), params
+        list(d["act_names"]),
+        d["q_default_act"].astype(np.float32),
+        float(d["step_dt"]),
+        params,
+        arms=not no_arms,
+        hip_yaw=not no_hip_yaw,
     )
 
     ticks, solves, diff = [], [], 0.0

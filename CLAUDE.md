@@ -57,7 +57,7 @@ uv run python scripts/run_env.py --viz kit                    # load the Robonio
 uv run python scripts/build_controller.py                     # build the controller (C functions + acados solver), no Isaac
 uv run python scripts/run_stepping.py --steps 20                # stage-2 stepping in place (crouch, calibrate, step)
 uv run python scripts/run_stepping.py --push x+1.75            # one push mid single support while stepping
-uv run python scripts/run_stepping_nocalib.py --viz kit        # same, spawned crouched, no AHRS calibration
+uv run python scripts/run_stepping_nocalib.py --viz kit        # spawned crouched, no AHRS calibration (holds: bias > 0.2 deg)
 ```
 
 `physics=<PRESET>` selects one of the physics presets defined per task (e.g. the
@@ -91,7 +91,7 @@ source/MPC_Humanoid/MPC_Humanoid/   installable package: robot config, env, mpc,
 assets/                             USD assets (robonionv2.usd) + controller URDF (robonionv2_controller.urdf)
 references/                         URDF, CAD-derived docs, git submodules (IK, RL refs)
 scripts/                            run_env.py (load + play the env), build_controller.py (build the controller, no Isaac),
-                                    run_stepping.py (stepping in place + push), run_stepping_nocalib.py (same, spawned
+                                    run_stepping.py (stepping in place, walking, pushes), run_stepping_nocalib.py (spawned
                                     crouched, no AHRS calibration), benchmark_stepping.py (replay a recorded run, no Isaac)
 tools/asset/                        URDF -> USD pipeline scripts (fix, flatten, check), controller URDF export
 outputs/                            scratch (git-ignored): acados build, stage-1/2 prototypes, validation scripts/data
@@ -109,8 +109,8 @@ project source to hand-edit, except where noted below.
 
 - `robots/robonionv2.py` — the single `Robonion_CFG` `ArticulationCfg`: USD asset
   path, initial pose (`DEFAULT_JOINT_POS` from `robots/robonion_params.py`), and
-  per-actuator-group `DCMotorCfg`/`ImplicitActuatorCfg` (legs, torso/arms, head, and the
-  passive parallelogram joints). This is the one
+  per-actuator-group `DCMotorCfg`/`ImplicitActuatorCfg` (one group per servo type and servo count, and
+  the unpowered parallelogram back bars). This is the one
   source of truth every env/task imports the robot from.
 - `env/` — the plain (non-RL) `ManagerBasedEnvCfg` that the MPC controller drives
   directly (`MpcHumanoidRobonionEnvCfg` in `robonion_env_cfg.py`, sim dt 1 ms,
@@ -125,12 +125,10 @@ project source to hand-edit, except where noted below.
   the base class, so any env cfg here must define both.
 - `mpc/` — the controller stack (model, estimator, NMPC, gait plan, controller; see
   *Controller* below). Kept independent of `tasks/` — it's a plain module, not an RL task.
-- `tasks/mpc_humanoid/` — Isaac Lab's generated RL-task tree (gym-registered,
-  manager-based, `config/<variant>/` + shared `mdp/`). Currently only holds the
-  generated cart-pole placeholder task (`config/cartpole/`); keep it isolated until a real Robonion RL/benchmark task is registered here, then
-  retire it so it can't be run by accident as the humanoid task. **Don't put the MPC
-  controller or its non-RL env here** — this tree is specifically for gym-registered
-  RL tasks with reward/termination managers.
+- `tasks/` — entry point for gym-registered Isaac Lab RL tasks (`import_packages` in `tasks/__init__.py`,
+  `isaaclab.tasks` entry point in `pyproject.toml`). Empty: the generated cart-pole placeholder was removed on
+  2026-10-22. **Don't put the MPC controller or its non-RL env here** — this tree is specifically for
+  gym-registered RL tasks with reward/termination managers.
 
 Never conflate `robots/` (asset + actuator config) with the USD asset's raw
 inertial/collision data — `robonionv2.py` deliberately keeps them separate.
@@ -146,32 +144,80 @@ retired: straight-leg standing only needs the servos to hold the pose,
 and every active mode (balancing, stepping) runs at the crouched pose. Its code is at git tag
 `stage2`; its results stay in `docs/stage1.md` as a record.
 
-**Project state (stage 2 closed by the user on 2026-09-26; stage 3 set on 2026-10-04).** Stage 3
-is base position estimation. The supervisor rejected the stage-2 base x, y, z:
-`ContactProjectionEstimator` pins the contact points (`cref`) in the world, so any foot slip
-becomes a permanent position error, and slip cannot be measured. Proposed replacement: the
-leg-kinematics + IMU EKF of Bloesch et al. 2012 (RSS). The proposal and its offline validation
-(record a stepping run, replay the filter in `outputs/stage3_prototypes/`, drift of x, y, z
-against the simulator truth in the world frame) are in `docs/PLAN.md`, *Stage 3*. Not started;
-the controller keeps the stage-2 estimator until the results are in. The user dropped the
-Jetson AGX Orin tick benchmark (the Jetson is assumed to keep up). After stage 3: a hardware
-check of the contact-mode monitor and the estimator (standing, slow stepping), whose
-thresholds (0.2 deg, 15 ms lead, 2 ticks) were tuned in Isaac only; then stage 4, footstep
-adaptation. Known issues, all listed under *Open* in `docs/stage2.md`:
-- Tick 4.2-4.3 ms mean / 4.6-4.8 ms p95 on the desktop, 2 % of ticks over 5 ms; Jetson not benchmarked.
+**Project state (stage 2 closed by the user on 2026-09-26; stage 3 set on 2026-10-04, widened
+2026-10-07 and 2026-10-09, closed by the user on 2026-10-22; stage 4 not decided yet).** Stage 3 is base
+position estimation, the whole body in the NMPC, and walking. Closed with: 40 steps in place clean, straight
+walking clean up to 0.15 m/s, ±1.0 N·s pushes while walking fall in 1 of 24 runs at 0.05 and at 0.1 m/s; after a
+push the gait holds and restarts (no recovery step). Next proposed: servo identification before fast walking. Working notes and every result: `docs/stage3.md` (local, git-ignored); the summary is in
+`docs/PLAN.md`, *Stage 3*. Branch `feat/movement-gait`.
+- Estimation:
+  - The supervisor rejected the stage-2 base x, y, z: `ContactProjectionEstimator` pins the contact
+    points (`cref`) in the world, so any foot slip becomes a permanent position error.
+  - The controller now takes base x, y, z and velocity from the leg-kinematics + IMU EKF of
+    Bloesch et al. 2012 (`ekf.py`).
+- Tick time: the NMPC runs every second tick (`NMPC_EVERY = 2`, 100 Hz).
+  - The tick stays 5 ms. Estimation, monitor and gait rules stay at 200 Hz: the user kept all the
+    5 ms tuning.
+  - A plain 10 ms tick is the fallback only if the whole-body NMPC does not fit.
+  - 50 Hz was tried and rejected (falls, slip).
+- Whole body: pelvis yaw, hip yaw and the 8 arm joints in the NMPC, for balance and yaw damping. Built by
+  session a3 on `feat/arms-yaw`, merged 2026-10-10 (51adb38).
+  - Arm targets as NMPC inputs with a servo-error cost, a ground yaw-moment cost (`W_MZ`), Radau with 2 stages
+    on the first 8 intervals and 1 on the rest (1 stage everywhere rolled the soles onto edges in Isaac), HPIPM
+    SPEED_ABS with tolerances 1e-5.
+  - Base yaw comes from the EKF; `--no_arms` / `--no_hip_yaw` hold those joints at the default pose on the same
+    build.
+  - Isaac push table at 7485037: full 15/15, yaw + arms 14/15, yaw only 15/15. Tick 4.0-4.1 ms mean / 4.9-5.1 ms
+    p95.
+- Servos per servo type (2026-10-13, 09807f2; see *When editing robot/task config*): Isaac full 13/15, +x 1.75
+  passes 1/3. The bisect found no single cause (new limits, new K/D or the 3.14 rad/s torso rate alone each drop
+  one seed); +x 1.75 sits at the limit. Re-check once the measured servo parameters are in.
+- EKF drift against the Isaac truth (2026-10-12): x, y ≤ 1-3 mm over 11-24 s with up to 74 mm foot slip, z
+  -0.07 mm/s. The 40-step fall at that time (~29 clean steps, stance sole rolled in single support) is gone: 40
+  steps in place are clean since stage 3.
+- Upstream `robinion_description` 55ac2c2 adopted (2026-10-15, 6e2e9c5..2f225f4): the URDF is copied to
+  `assets/robonionv2.urdf` and the asset is built from it; servo parameters and map follow its
+  `config/actuators.yaml` (14.8 V, armature 0.038 as a BAM prior, servos on knee and front shin). The 0.038
+  armature needed T_ds 0.2 s and `MONITOR_TICKS` 3; Isaac push table 14/15 (+x 1.75 falls on seed 1, the other
+  two hold 5-8 s), slip without push 3-4 mm per 10 steps (was ≤ 1.5 mm). Bisect and diagnosis in
+  `docs/stage3.md`.
+- Walking: straight walking at a commanded speed with an ALIP footstep planner (user decision
+  2026-10-09), built on `feat/movement-gait` (9a50d8f, 2cfe9f8, ad56ba0; `--vx`, `--ramp_steps` in
+  `run_stepping.py`). `mpc/alip.py` gives the step change du about the plan; the controller removes a learned
+  offset per swing foot (`ALIP_BINS` per swing progress) and uses du as step-to-step feedback. After a hold it
+  restarts with a new plan from the current soles.
+  - `W_DCM = 1000` (was 100, ad56ba0): at 100 the servo-rate cost kept the planned DCM 19 mm RMS behind the walking
+    reference. Battery of 51 runs: falls 1/51 (was 2/51), no holds walking without push, holds after walking pushes
+    halved; in-place x-1.0 now holds up to 7.3 s (no fall).
+  - Speed limit 0.15 m/s (user, 2026-10-18): clean on 6/6 runs. At 0.2 m/s 3/6 stop and restart, at 0.25 m/s
+    holds and one fall: the soles roll to an edge at weight transfer and in single support. Tracking harder
+    (runtime weights) made it worse.
+  - Capture steps (a step adapted to a push within the current swing) were tried twice and reverted.
+- The user dropped the Jetson AGX Orin tick benchmark (the Jetson is assumed to keep up).
+- Later:
+  - a hardware check of the contact-mode monitor and the estimator, whose thresholds (0.2 deg,
+    15 ms lead, 3 ticks) were tuned in Isaac only;
+  - stage 4: fast walking and turning.
+
+Known issues from stage 2, listed under *Open* in `docs/stage2.md`:
+- Stage-2 tick: 4.2-4.3 ms mean / 4.6-4.8 ms p95 on the desktop. With the 100 Hz NMPC and the
+  compiled EKF: 2.34 / 2.96 ms (offline replay).
 - Backward pushes while stepping: −x 1.75 N·s survived in 2 of 3 seeds, −x 2.0 falls. Both
   passed with 4 PhysX velocity iterations; the drop comes from the simulator fix (0
   iterations), not the controller, and was accepted by the user.
-- After a push the gait holds the targets and waits (up to 3.6 s), no active recovery;
-  lateral pushes beyond ±0.5 / +1.0 N·s need step placement (stage 4).
+- After a push the gait holds the targets and waits (up to 3.6 s; up to 7.3 s after in-place x-1.0 since
+  `W_DCM` 1000), no active recovery; lateral pushes beyond ±0.5 / +1.0 N·s need a recovery step (ALIP walking
+  does not give one; capture steps were tried and reverted).
 - Landing drift ~0.3 mm per step (needs pelvis yaw in the model); ground-height error
   beyond ±5 mm falls.
 - All results come from Isaac only; limits within one push step are not precise.
 
-- `model.py`: floating base (x, y, z, roll, pitch) + 9 independent joints
-  (`MODEL_JOINTS`: hip roll, front thigh, ankle pitch, ankle roll per leg, torso pitch);
-  passive joints from `PASSIVE_COUPLING`, yaw/arms/head fixed, mass matrix frozen at the
-  standing pose. Contacts are rigid rows with a contact mode per foot (`flat`, `toe`,
+- `model.py`: floating base (x, y, z, roll, pitch, yaw) + 9 independent joints
+  (`MODEL_JOINTS`: hip roll, front thigh, ankle pitch, ankle roll per leg, torso pitch), hip yaw
+  (`HIP_YAW_JOINTS`) and the 8 arm joints (`ARM_JOINTS`); yaw, hip yaw and arms can be built off (the
+  stage-2 model). Parallelogram joints follow `PASSIVE_COUPLING` (`robots/robonion_params.py`); the
+  servos on knee and front shin add to the coordinate they follow (`drive_of`). Head fixed, mass matrix frozen at the
+  standing pose. Contacts are rigid rows (6 per sole with yaw) with a contact mode per foot (`flat`, `toe`,
   `heel`, `left_edge`, `right_edge`, `air`); the contact wrench is eliminated in closed
   form (position-mode servos leave it no freedom). In double support the two sole-pitch
   rows are identical (parallelograms), so the right one is switched off. Servo K/D/armature
@@ -181,14 +227,19 @@ adaptation. Known issues, all listed under *Open* in `docs/stage2.md`:
   tilt rate, sole height and the model-predicted normal force; there is no contact
   sensing), `ContactProjectionEstimator` (state on the contact manifold). `compiled=True`
   (used by `controller.py`) runs `RigidContactModel`, `AhrsGyro` and the estimator as generated C.
+- `ekf.py`: `LegKinematicsEkf` (Bloesch et al. 2012): base position, velocity and orientation, and one
+  contact point per sole. Its inputs are the IMU, the leg kinematics, the AHRS tilt and the monitor's
+  contact modes. `compiled=True` (used by `controller.py`) generates the leg kinematics and their
+  Jacobian as C (`robonion_ekf_<hash>.so`).
 - `nmpc.py`: `RobonionNMPC`, acados SQP-RTI NMPC, outputs servo targets. The caller passes the
   plan per node (contact modes, DCM / CoM-velocity and swing-sole references); edge modes are
   never planned. Per-node references and gates are parameters, compiled contact algebra, RTI
   split (`prepare` / `feedback`), 16 nodes over 0.5 s. Cost weights are hardcoded constants
   by user decision (no config); `W_U = 0.1` was chosen over 10; swing weight 1e6 (1e4 barely
   lifted the foot); non-uniform node grids broke the tuning.
-- `gait.py`: `GaitPlan` — contact schedule (T_ss 0.3 s, T_ds 0.1 s, clearance 2 cm; user
-  decision, chosen against the 1.1 and 1.5-1.7 Hz modes and the servo rate limit), closed-form
+- `gait.py`: `GaitPlan` — contact schedule (T_ss 0.3 s, T_ds 0.2 s, clearance 2 cm; user
+  decisions: 0.3/0.1 s chosen against the 1.1 and 1.5-1.7 Hz modes and the servo rate limit, T_ds 0.2 s since
+  2026-10-15 because 0.1 s slid the soles apart at weight transfer with the 0.038 armature), closed-form
   DCM/CoM reference, swing-sole spline, `stretch()` for retiming.
 - `controller.py`: `RobonionController` — crouch ramp (0.2 rad; straight legs are singular and
   too slow for the swing), AHRS calibration, then the gait. `nominal_pose()` gives the crouched
@@ -197,10 +248,15 @@ adaptation. Known issues, all listed under *Open* in `docs/stage2.md`:
   support, hold + plan pause + posture reset + standing recovery in double support) are each
   justified by an Isaac failure in `docs/stage2.md`, and run as a state machine (`State`: STEP,
   HOLD, RESET, CATCH, RECOVER). Edge detection while stepping uses the predicted tilt
-  (`MONITOR_LEAD` 15 ms: tilt + lead · rate beyond 0.2°) on 2 consecutive ticks
-  (`MONITOR_TICKS`; a touchdown impact reads 12-19 deg/s for one tick). The asset runs with 0
+  (`MONITOR_LEAD` 15 ms: tilt + lead · rate beyond 0.2°) on 3 consecutive ticks
+  (`MONITOR_TICKS`; a touchdown impact reads 12-19 deg/s for one tick, and with the 0.038 armature the
+  0.1-0.15° sole wobble after touchdown lasts 2 ticks). The asset runs with 0
   PhysX TGS velocity iterations (`robonionv2.py`): with 4, a flat sole read up to 3.6 deg/s of
-  false tilt rate.
+  false tilt rate. `NMPC_EVERY = 2`: feedback on every second tick, RTI preparation on the tick
+  between. Targets between the two follow u + v·dt. When node 0's contact modes change, the plan is
+  retimed or the NMPC restarts after a hold, that tick only prepares and the feedback follows on the
+  next one (at most one deferral in a row; a full solve does not fit the tick). No peel-off while the
+  targets are held (HOLD, RESET, CATCH).
 - Build: `scripts/build_controller.py` (no Isaac) generates and compiles the C functions, the
   contact algebra (`alg.so`) and the acados solver into `outputs/acados/`; runtime
   (`run_stepping.py`, `benchmark_stepping.py`) only loads them and raises `FileNotFoundError`
@@ -225,18 +281,24 @@ adaptation. Known issues, all listed under *Open* in `docs/stage2.md`:
   The prototypes in both folders import the package modules as they were before the rename to
   `nmpc.py` / `controller.py` / `robonion_params.py`, so they only run with the package at git
   tag `stage2` (check that tag out first).
-- Open: a stepping tick costs 4.2-4.3 ms mean / 4.6-4.8 ms p95 in Isaac on the desktop (compiled
-  estimation + NMPC), near the 5 ms budget; the real robot runs on a Jetson AGX Orin (not
-  measured, benchmark dropped by the user; if needed: `scripts/run_stepping.py --record run.npz` on the desktop, then
-  `scripts/build_controller.py` and `scripts/benchmark_stepping.py run.npz` on the Jetson, no
-  Isaac needed). Lateral push
-  recovery while stepping needs footstep adaptation (stage 4). Landing drift ~0.3 mm per step
-  needs pelvis yaw in the model (walking / turning stage).
+- Open:
+  - Tick with the whole-body NMPC: 4.0-4.1 ms mean / 4.9-5.1 ms p95 in Isaac on the desktop.
+    - After +x 1.75 N·s the p95 reaches 7.4-7.8 ms in some runs; not investigated.
+    - yaw + arms (`--no_hip_yaw`) fell once at +x 1.75 (seed 1); after +x 1.75 the gait holds for 3-7 s.
+    - The real robot runs on a Jetson AGX Orin (not measured, benchmark dropped by the user). If
+      needed: `scripts/run_stepping.py --record run.npz` on the desktop, then
+      `scripts/build_controller.py` and `scripts/benchmark_stepping.py run.npz` on the Jetson, no
+      Isaac needed.
+  - Lateral push recovery while stepping needs footstep placement (ALIP, stage 3).
+  - Landing drift (~0.3 mm per step in stage 2): with the whole body the foot moves ≤ 1.2 mm over 10 steps
+    without a push; not measured per step.
+- The laptop is shared with other projects: run Isaac and other heavy jobs under
+  `flock /tmp/laptop_heavy.lock <command>` (agreed with `slam_project`, 15 GB RAM).
 
 ## The URDF → USD pipeline (assets/robonionv2.usd)
 
 This is the asset `Robonion_CFG` in `robots/robonionv2.py` loads. It is derived
-from `references/robinion_description/robinion2.urdf` by a converter that only
+from `references/robinion_description/urdf/robinion2.urdf` by a converter that only
 understands trees, so a fixed set of physics facts (parallelogram loop joints,
 floating base, foot inertia, etc.) must be re-authored by hand after every
 conversion. **Read `references/docs/joint_info.md` in full before touching this
@@ -245,7 +307,7 @@ known defects in the URDF, and the exact pipeline below. Do not regenerate or
 hand-edit `assets/robonionv2.usd` without reading it first.
 
 ```bash
-uv run urdf_usd_converter references/robinion_description/robinion2.urdf assets/robonionv2 \
+uv run urdf_usd_converter references/robinion_description/urdf/robinion2.urdf assets/robonionv2 \
     -p robinion_description=$PWD/references/robinion_description   # 1. URDF -> raw USD
 uv run python tools/asset/fix_robinion_usd.py assets/robonionv2/robinion.usda  # 2. hand-made physics fixes
 uv run python tools/asset/flatten_usd.py assets/robonionv2/robinion.usda assets/robonionv2.usd  # 3. standalone asset
@@ -267,15 +329,18 @@ Rules when working on this pipeline:
 
 ## When editing robot/task config
 
-- `robots/robonionv2.py` deliberately keeps the actuator model (stiffness/damping/
-  armature, estimated from the Dynamixel XH540-W270/XH430-W350 datasheets; effort/velocity limits
-  taken verbatim from the URDF, which the user confirmed correct) separate from the
-  USD asset's raw inertial/collision data — don't fold one into the other.
-- The 4 parallelogram-passive joints (`*_knee_pitch_joint`, `*_back_thigh_pitch_joint`,
-  `*_front_shin_pitch_joint`, `*_back_shin_pitch_joint`) are unmotored by design
-  (`ImplicitActuatorCfg` with zero stiffness/damping/effort) — do not add a drive to
-  them without confirming with the user first; see *Leg mechanism* in
-  `joint_info.md` for why they are mechanically constrained, not free.
+- `robots/robonionv2.py` deliberately keeps the actuator model separate from the USD asset's raw
+  inertial/collision data — don't fold one into the other. The actuator model is one `DCMotorCfg`
+  per servo type and servo count, from `SERVOS` / `SERVO_JOINTS` in `robots/robonion_params.py`, which follow
+  the upstream URDF and `config/actuators.yaml` (user, 2026-10-15): XH540-W270 on hip roll, front thigh (2
+  servos), knee (2), front shin, ankle pitch and ankle roll; XM540-W270 on hip yaw, torso pitch, shoulders and
+  elbow pitch; XM430-W350 on elbow yaw and the head. 14.8 V figures, K = stall / 0.217 rad, armature and
+  friction BAM priors until the servos are identified. `mpc/model.py` and `mpc/nmpc.py` take the same values.
+- Knee and front shin carry servos (user, 2026-10-15, superseding "5 motors per leg"); their targets follow
+  front thigh and ankle pitch through the parallelogram gain (`env/actions.py`, `CoupledJointPositionAction`),
+  so each leg keeps 2 pitch DOF. The back bars (`*_back_thigh_pitch_joint`, `*_back_shin_pitch_joint`) are
+  unpowered (`ImplicitActuatorCfg` with zero stiffness/damping/effort); see *Leg mechanism* in
+  `joint_info.md`.
 
 ## Documentation conventions
 

@@ -1,0 +1,91 @@
+Robonion MPC humanoid: commands to run the whole project with uv.
+Run everything from the repo root (/home/tkuai/MPC_Humanoid/MPC_Humanoid).
+Never call python or pip directly; uv resolves the interpreter and Isaac Sim / Isaac Lab from .venv.
+
+=====================================================================
+0. Setup (once, or after changing pyproject.toml)
+=====================================================================
+uv sync                                         # install / update the environment
+uv run python .vscode/tools/setup_vscode.py     # optional: VS Code / Pylance paths
+uv run pre-commit run --all-files               # lint + format (ruff, codespell)
+
+# acados is needed for the controller (build and runtime), every shell:
+export ACADOS_SOURCE_DIR=$HOME/acados
+export LD_LIBRARY_PATH=$HOME/acados/lib
+
+# The laptop is shared: wrap Isaac and other heavy jobs in
+#   flock /tmp/laptop_heavy.lock <command>
+# and run one Isaac process at a time.
+
+=====================================================================
+1. Robot asset (only after the URDF or the USD fixes change)
+=====================================================================
+# Read references/docs/joint_info.md first. The asset is built from assets/robonionv2.urdf
+# (copy of the upstream URDF), meshes from references/robinion_description.
+uv run urdf_usd_converter assets/robonionv2.urdf assets/robonionv2 \
+    -p robinion_description=$PWD/references/robinion_description           # URDF -> raw USD
+uv run python tools/asset/fix_robinion_usd.py assets/robonionv2/robinion.usda   # hand-made physics fixes
+uv run python tools/asset/flatten_usd.py assets/robonionv2/robinion.usda assets/robonionv2.usd
+uv run python tools/asset/check_urdf_vs_usd.py assets/robonionv2.usd         # compare SUMMARY with joint_info.md
+uv run python tools/asset/export_controller_urdf.py assets/robonionv2.usd assets/robonionv2_controller.urdf
+
+=====================================================================
+2. Check the env (robot stands with the servos only, no controller)
+=====================================================================
+uv run python scripts/run_env.py                 # headless
+uv run python scripts/run_env.py --viz kit       # with the Isaac Sim window
+
+=====================================================================
+3. Build the controller (no Isaac; after any change to the model, NMPC, default pose)
+=====================================================================
+uv run python scripts/build_controller.py        # C functions + acados solver into outputs/acados/
+
+=====================================================================
+4. Run the controller in Isaac (scripts/run_stepping.py)
+=====================================================================
+# Stepping in place (crouch, AHRS calibration, then steps)
+uv run python scripts/run_stepping.py                      # 10 steps in place, headless
+uv run python scripts/run_stepping.py --viz kit            # with the Isaac Sim window
+uv run python scripts/run_stepping.py --steps 40 --seed 1  # 40 steps, sensor-noise seed 1
+
+# Straight walking (speed limit 0.15 m/s)
+uv run python scripts/run_stepping.py --steps 12 --vx 0.1            # footholds from the ALIP planner
+uv run python scripts/run_stepping.py --steps 20 --vx 0.15 --ramp_steps 2
+
+# Pushes (axis + impulse in N*s), one per run
+uv run python scripts/run_stepping.py --push x+1.75                  # in place, mid single support
+uv run python scripts/run_stepping.py --push y-0.5 --push_at ds      # during double support
+uv run python scripts/run_stepping.py --steps 12 --vx 0.05 --push y+1.0
+
+# Gait options
+#   --clearance 0.02   sole lift [m]      --t_ss 0.30  single support [s]   --t_ds 0.20  double support [s]
+#   --push_duration 0.05 [s]              --no_arms / --no_hip_yaw  hold those joints (same build)
+# Recordings
+#   --trace trace.npz   estimator state + simulator truth per tick
+#   --record run.npz    controller inputs/outputs per tick (for the benchmark below)
+
+# Spawned already crouched, no AHRS calibration. The AHRS bias (e.g. 0.47 deg) exceeds the 0.2 deg monitor
+# threshold, so the gait holds from the start: it shows the calibration is needed.
+uv run python scripts/run_stepping_nocalib.py --viz kit
+uv run python scripts/run_stepping_nocalib.py --steps 20 --seed 1
+
+# Test convention: one env per process, runs in sequence, seeds 0, 1, 2 for every case, e.g.
+for s in 0 1 2; do
+  flock /tmp/laptop_heavy.lock uv run python scripts/run_stepping.py --seed $s --push x+1.75
+done
+
+=====================================================================
+5. Tick benchmark without Isaac (desktop or Jetson)
+=====================================================================
+uv run python scripts/run_stepping.py --record run.npz     # on the desktop, with Isaac
+uv run python scripts/build_controller.py                  # on the target machine
+uv run python scripts/benchmark_stepping.py run.npz --repeat 3
+
+=====================================================================
+6. Isaac Lab RL tooling (no task registered yet)
+=====================================================================
+uv run isaaclab zero_agent --task <TASK_NAME> --num_envs 16
+uv run isaaclab random_agent --task <TASK_NAME> --num_envs 16
+uv run isaaclab train --rl_library <RL_LIBRARY> --task <TASK_NAME>
+uv run isaaclab play --rl_library <RL_LIBRARY> --task <TASK_NAME> --checkpoint latest
+uv run isaaclab benchmark runtime --task <TASK_NAME> --num_envs 16 --num_steps 1000

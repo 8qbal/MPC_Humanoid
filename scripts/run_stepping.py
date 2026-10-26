@@ -235,7 +235,7 @@ def main() -> None:
             fell = True
             break
 
-    result = "FALL" if fell else "ok"
+    result = "FALL" if fell else "NO STEPS" if landings == 0 and params.n_steps > 0 else "ok"
     push = f" push {args.push} at plan t={push_t:.2f} ({args.push_at}, modes {push_modes})" if args.push else ""
     print(
         f"\nRESULT stepping {params.n_steps} steps, clearance {1000 * args.clearance:.0f} mm{push}: {result} at "

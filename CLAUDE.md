@@ -173,8 +173,8 @@ push the gait holds and restarts (no recovery step). Next proposed: servo identi
   passes 1/3. The bisect found no single cause (new limits, new K/D or the 3.14 rad/s torso rate alone each drop
   one seed); +x 1.75 sits at the limit. Re-check once the measured servo parameters are in.
 - EKF drift against the Isaac truth (2026-10-12): x, y ≤ 1-3 mm over 11-24 s with up to 74 mm foot slip, z
-  -0.07 mm/s. A 40-step run without push falls after ~29 clean steps (stance sole rolls in single support): a
-  gait issue, open.
+  -0.07 mm/s. The 40-step fall at that time (~29 clean steps, stance sole rolled in single support) is gone: 40
+  steps in place are clean since stage 3.
 - Upstream `robinion_description` 55ac2c2 adopted (2026-10-15, 6e2e9c5..2f225f4): the URDF is copied to
   `assets/robonionv2.urdf` and the asset is built from it; servo parameters and map follow its
   `config/actuators.yaml` (14.8 V, armature 0.038 as a BAM prior, servos on knee and front shin). The 0.038
@@ -205,8 +205,9 @@ Known issues from stage 2, listed under *Open* in `docs/stage2.md`:
 - Backward pushes while stepping: −x 1.75 N·s survived in 2 of 3 seeds, −x 2.0 falls. Both
   passed with 4 PhysX velocity iterations; the drop comes from the simulator fix (0
   iterations), not the controller, and was accepted by the user.
-- After a push the gait holds the targets and waits (up to 3.6 s), no active recovery;
-  lateral pushes beyond ±0.5 / +1.0 N·s need step placement (ALIP, stage 3).
+- After a push the gait holds the targets and waits (up to 3.6 s; up to 7.3 s after in-place x-1.0 since
+  `W_DCM` 1000), no active recovery; lateral pushes beyond ±0.5 / +1.0 N·s need a recovery step (ALIP walking
+  does not give one; capture steps were tried and reverted).
 - Landing drift ~0.3 mm per step (needs pelvis yaw in the model); ground-height error
   beyond ±5 mm falls.
 - All results come from Isaac only; limits within one push step are not precise.

@@ -8,7 +8,7 @@
 Gait plan: contact schedule, footholds, DCM / CoM reference and swing-foot height.
 
 Each single support k swings one foot to footholds[k]. Nominally a step lands step_length(k) ahead of the stance
-foot at the initial foot spacing: zero for stepping in place (vx = 0); walking ramps the step length up over the
+foot at the initial foot spacing: zero for stepping in place (vx = vy = 0); walking ramps the step length up over the
 first ramp_steps steps and down to zero (feet side by side) over the last ones. replan() moves a foothold (ALIP, or
 the measured landing) and every later one with it.
 
@@ -34,6 +34,7 @@ class GaitParams:
     first_swing: int = 1  # 0 left, 1 right
     v_descent: float = 0.1  # m/s, sole-centre descent once single support lasts longer than planned
     vx: float = 0.0  # m/s, commanded forward speed
+    vy: float = 0.0  # m/s, commanded sideways speed (+ left)
     ramp_steps: int = 2  # steps to reach vx at the start and to stop at the end
 
 
@@ -78,11 +79,17 @@ class GaitPlan:
         self.phases = phases
         self._nominal(0)
 
+    def _ramp(self, k: int) -> float:
+        r = self.p.ramp_steps + 1
+        return min((k + 1) / r, (self.p.n_steps - 1 - k) / r, 1.0)
+
     def step_length(self, k: int) -> float:
         """Nominal step length of step k: the swing foot lands this far ahead of the stance foot."""
-        r = self.p.ramp_steps + 1
-        f = min((k + 1) / r, (self.p.n_steps - 1 - k) / r, 1.0)
-        return self.p.vx * (self.p.t_ss + self.p.t_ds) * f
+        return self.p.vx * (self.p.t_ss + self.p.t_ds) * self._ramp(k)
+
+    def step_shift(self, k: int) -> float:
+        """Nominal sideways shift of step k: the swing foot lands this far to the left of its nominal width."""
+        return self.p.vy * (self.p.t_ss + self.p.t_ds) * self._ramp(k)
 
     def stance_xy(self, k: int) -> np.ndarray:
         """Position of the foot that stands during step k (k = n_steps: after the last step, the last stance)."""
@@ -107,7 +114,8 @@ class GaitPlan:
     def _nominal(self, k0: int):
         for k in range(k0, self.p.n_steps):
             side = 1.0 if self.swings[k] == 0 else -1.0
-            self.footholds[k] = self.stance_xy(k) + side * self.spacing + np.array([self.step_length(k), 0.0])
+            step = np.array([self.step_length(k), self.step_shift(k)])
+            self.footholds[k] = self.stance_xy(k) + side * self.spacing + step
         self._set_zmps()
 
     def _set_zmps(self):

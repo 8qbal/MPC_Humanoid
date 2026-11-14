@@ -30,6 +30,7 @@ parser.add_argument("--clearance", type=float, default=0.02, help="[m] peak sole
 parser.add_argument("--t_ss", type=float, default=0.30, help="[s] single support")
 parser.add_argument("--t_ds", type=float, default=0.20, help="[s] double support")
 parser.add_argument("--vx", type=float, default=0.0, help="[m/s] forward walking speed (0: stepping in place)")
+parser.add_argument("--vy", type=float, default=0.0, help="[m/s] sideways walking speed (+ left, - right)")
 parser.add_argument("--ramp_steps", type=int, default=2, help="steps to reach --vx and to stop")
 parser.add_argument("--push", default=None, help="axis and impulse [N*s], e.g. x+1.75 or y-1.0")
 parser.add_argument("--push_at", default="mid_ss", choices=("mid_ss", "ds"))
@@ -135,6 +136,8 @@ def main() -> None:
         clearance=args.clearance,
         n_steps=args.steps,
         vx=args.vx,
+        vy=args.vy,
+        first_swing=0 if args.vy > 0 else 1,
         ramp_steps=args.ramp_steps,
     )
     controller = RobonionController(
@@ -221,7 +224,7 @@ def main() -> None:
                 lifts += up and not in_air[i]
                 landings += in_air[i] and not up
                 if (up and not in_air[i] and not walk) or (in_air[i] and not up):
-                    walk.append((step * env.step_dt, robot.data.root_pos_w.torch[0, 0].item()))
+                    walk.append((step * env.step_dt, *robot.data.root_pos_w.torch[0, :2].tolist()))
                 if up:
                     anchor[i] = None
                 elif anchor[i] is None:
@@ -243,10 +246,11 @@ def main() -> None:
         f"{(displacement * 1000).round(1)} mm, targets held {held * env.step_dt:.2f} s"
     )
     if len(walk) > 1:
-        (t0, x0), (t1, x1) = walk[0], walk[-1]
+        (t0, x0, y0), (t1, x1, y1) = walk[0], walk[-1]
         print(
             f"walking: base x {1000 * (x1 - x0):.0f} mm in {t1 - t0:.2f} s ({(x1 - x0) / (t1 - t0):.3f} m/s, command "
-            f"{args.vx:.3f}), max slip per contact L/R {(slip * 1000).round(1)} mm"
+            f"{args.vx:.3f}), y {1000 * (y1 - y0):.0f} mm ({(y1 - y0) / (t1 - t0):.3f} m/s, command {args.vy:.3f}), "
+            f"max slip per contact L/R {(slip * 1000).round(1)} mm"
         )
 
     if ticks:

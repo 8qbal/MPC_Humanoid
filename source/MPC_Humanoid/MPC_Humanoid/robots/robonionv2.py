@@ -5,10 +5,20 @@ from __future__ import annotations
 import os
 
 import isaaclab.sim as sim_utils
-from isaaclab.actuators import DCMotorCfg, ImplicitActuatorCfg
+from isaaclab.actuators import ImplicitActuatorCfg
 from isaaclab.assets import ArticulationCfg
 
-from .robonion_params import DEFAULT_JOINT_POS, SERVO_JOINTS, SERVOS, scaled
+from ..actuators import BamMotorCfg
+from .robonion_params import (
+    DEFAULT_JOINT_POS,
+    ERROR_GAIN,
+    KP_FW,
+    SERVO_JOINTS,
+    SERVO_PARAM_FILES,
+    SERVOS,
+    VIN,
+    scaled,
+)
 
 # one actuator group per servo type and number of servos per joint
 _GROUPS: dict[tuple[str, int], list[str]] = {}
@@ -49,18 +59,17 @@ Robonion_CFG = ArticulationCfg(
     soft_joint_pos_limit_factor=0.9,
     actuators={
         # the group name goes into a USD prim name, which cannot hold '-'
-        f"{name.replace('-', '_')}_x{count}": DCMotorCfg(
+        f"{name.replace('-', '_')}_x{count}": BamMotorCfg(
             joint_names_expr=patterns,
-            saturation_effort=s.effort,
-            actuator_effort_limit=s.effort,
+            params_json=SERVO_PARAM_FILES[name],
+            kp_fw=KP_FW,
+            error_gain=ERROR_GAIN,
+            vin=VIN,
+            parallel_count=count,
+            actuator_effort_limit=float("inf"),  # the duty cycle and back-EMF bound the torque
             actuator_velocity_limit=s.velocity,
             joint_effort_limit=s.effort,
             joint_velocity_limit=s.velocity,
-            stiffness=s.stiffness,
-            damping=s.damping,
-            friction=s.friction,
-            dynamic_friction=s.friction,
-            armature=s.armature,
         )
         for (name, count), patterns in _GROUPS.items()
         for s in [scaled(SERVOS[name], count)]

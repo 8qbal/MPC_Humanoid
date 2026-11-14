@@ -26,6 +26,7 @@ from isaaclab.utils.noise import GaussianNoiseCfg as Gnoise
 from isaaclab.utils.noise import NoiseModelWithAdditiveBiasCfg
 from isaaclab_physx.physics import PhysxCfg
 
+from ..actuators import bind_bam_motors_event
 from ..robots.robonionv2 import Robonion_CFG
 from .actions import CoupledJointPositionActionCfg
 
@@ -113,6 +114,7 @@ class ObservationsCfg:
 
 @configclass
 class EventsCfg:
+    bind_bam_motors = EventTerm(func=bind_bam_motors_event, mode="startup")
     reset_scene = EventTerm(func=mdp.reset_scene_to_default, mode="reset", params={"reset_joint_targets": True})
 
 
@@ -131,6 +133,7 @@ class MpcHumanoidRobonionEnvCfg(ManagerBasedEnvCfg):
         self.decimation = 5
         self.sim.dt = 1.0 / 1000.0
         self.sim.render_interval = self.decimation
+        self.sim.use_newton_actuators = False  # the BAM servos are explicit PhysX actuators, not Newton-native ones
         self.sim.physics = PhysxCfg(
             solver_type=1,
             enable_enhanced_determinism=True,

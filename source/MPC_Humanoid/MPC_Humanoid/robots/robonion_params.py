@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+import math
+import os
 import re
 from typing import NamedTuple
 
@@ -15,16 +18,36 @@ class Servo(NamedTuple):
     friction: float  # N·m, Coulomb
 
 
-# From references/robinion_description/config/actuators.yaml (upstream 55ac2c2), at 14.8 V: effort, velocity = stall
-# torque and no-load speed (ROBOTIS e-Manual); damping = back-EMF (stall / no-load) + gearbox viscous; armature and
-# friction = priors from BAM identifications of MX servos, until the servos are identified.
-# stiffness: stall torque / 0.217 rad, the position error where the default P gain saturates the PWM
-# (references/docs/joint_info.md).
-SERVOS = {
-    "XH540-W270": Servo(11.7, 4.817, 11.7 / 0.217, 2.429 + 0.035, 0.038, 0.10),
-    "XM540-W270": Servo(12.9, 3.875, 12.9 / 0.217, 3.329 + 0.035, 0.038, 0.10),
-    "XM430-W350": Servo(4.8, 5.969, 4.8 / 0.217, 0.804 + 0.012, 0.038, 0.09),
+VIN = 14.8  # V
+KP_FW = 800.0  # firmware Position P Gain register (X-series default, references/docs/joint_info.md)
+# rad -> PWM duty per unit of P gain: 4096 counts/rev, P gain / 128, PWM limit 885 (bam dynamixel/xseries_actuator.py)
+ERROR_GAIN = (4096 / (2 * math.pi)) / (128 * 885)
+
+_SERVO_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../assets/servos"))
+SERVO_PARAM_FILES = {  # BAM m6 identifications (bam.fit), one per servo type
+    "XH540-W270": f"{_SERVO_DIR}/xh540_m6.json",
+    "XM540-W270": f"{_SERVO_DIR}/xm540_m6.json",
+    "XM430-W350": f"{_SERVO_DIR}/xm430_m6.json",
 }
+
+
+def _servo_from_bam(path: str) -> Servo:
+    """Linear servo equivalent of a BAM voltage-controlled servo: full-duty stall torque, no-load speed, the P loop
+    slope (duty reaches 1 at 1 / (KP_FW * ERROR_GAIN) rad), back-EMF plus viscous damping."""
+    with open(path) as f:
+        p = json.load(f)
+    effort = p["kt"] * VIN / p["R"]
+    return Servo(
+        effort,
+        VIN / p["kt"],
+        effort * KP_FW * ERROR_GAIN,
+        p["kt"] ** 2 / p["R"] + p["friction_viscous"],
+        p["armature"],
+        p["friction_base"],
+    )
+
+
+SERVOS = {name: _servo_from_bam(path) for name, path in SERVO_PARAM_FILES.items()}
 
 # servo -> {joint-name regex: number of servos driving the joint in parallel}, as in actuators.yaml (user, 2026-10-15)
 SERVO_JOINTS = {

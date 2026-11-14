@@ -71,8 +71,9 @@ does, restate the function/variable name, or leave narration of the current task
 ## Repository layout
 
 ```
-source/MPC_Humanoid/MPC_Humanoid/   installable package: robots/ (robot config), env/ (plain env), mpc/ (controller), tasks/ (RL)
+source/MPC_Humanoid/MPC_Humanoid/   installable package: actuators/ (BAM servo), robots/ (robot config), env/ (plain env), mpc/ (controller), tasks/ (RL)
 assets/                             USD assets (robonionv2.usd) + controller URDF (robonionv2_controller.urdf)
+assets/servos/                      BAM m6 identifications of the servos (xh540, xm540, xm430), source of every servo number
 references/                         URDF, CAD-derived docs, git submodules (IK, RL refs)
 scripts/                            run_env.py (load + play the env), build_controller.py (build the controller, no Isaac),
                                     run_stepping.py (stepping in place + push), run_stepping_nocalib.py (same, spawned
@@ -222,12 +223,17 @@ Rules when working on this pipeline:
 ## When editing robot/task config
 
 - `robots/robonionv2.py` deliberately keeps the actuator model separate from the USD asset's raw
-  inertial/collision data — don't fold one into the other. The actuator model is one `DCMotorCfg`
-  per servo type and servo count, from `SERVOS` / `SERVO_JOINTS` in `robots/robonion_params.py`, which follow
-  the upstream URDF and `config/actuators.yaml` (user, 2026-10-15): XH540-W270 on hip roll, front thigh (2
+  inertial/collision data — don't fold one into the other. The actuator model is one `BamMotorCfg`
+  (`actuators/bam_motor.py`, the BAM voltage-controlled servo with the m6 friction budget written to PhysX every
+  physics step) per servo type and servo count, from `SERVO_JOINTS` in `robots/robonion_params.py` (the map follows
+  the upstream URDF and `config/actuators.yaml`, user, 2026-10-15): XH540-W270 on hip roll, front thigh (2
   servos), knee (2), front shin, ankle pitch and ankle roll; XM540-W270 on hip yaw, torso pitch, shoulders and
-  elbow pitch; XM430-W350 on elbow yaw and the head. 14.8 V figures, K = stall / 0.217 rad, armature and
-  friction BAM priors until the servos are identified. `mpc/model.py` and `mpc/nmpc.py` take the same values.
+  elbow pitch; XM430-W350 on elbow yaw and the head. The servo parameters are the user's BAM m6 identifications
+  (`assets/servos/<servo>_m6.json`, 14.8 V, firmware Position P Gain 800 confirmed by the user on 2026-11-09).
+  `SERVOS` is derived from them (effort = kt V / R, velocity = V / kt, K = stall / 0.217 rad, D = kt² / R +
+  viscous), so `mpc/model.py` and `mpc/nmpc.py` take the same values; to change a servo, replace its JSON (not
+  numbers in the code) and rebuild the controller. `BamMotor` needs `sim.use_newton_actuators = False` and the
+  `bind_bam_motors_event` startup event, both set in `env/robonion_env_cfg.py`.
 - Knee and front shin carry servos (user, 2026-10-15, superseding "5 motors per leg"); their targets follow
   front thigh and ankle pitch through the parallelogram gain (`env/actions.py`, `CoupledJointPositionAction`),
   so each leg keeps 2 pitch DOF. The back bars (`*_back_thigh_pitch_joint`, `*_back_shin_pitch_joint`) are

@@ -87,8 +87,9 @@ indexing uses too much memory, remove unused simulator extension paths from
 ## Repository layout
 
 ```
-source/MPC_Humanoid/MPC_Humanoid/   installable package: robot config, env, mpc, RL tasks
+source/MPC_Humanoid/MPC_Humanoid/   installable package: actuators, robot config, env, mpc, RL tasks
 assets/                             USD assets (robonionv2.usd) + controller URDF (robonionv2_controller.urdf)
+assets/servos/                      BAM m6 identifications of the servos (xh540, xm540, xm430), source of every servo number
 references/                         URDF, CAD-derived docs, git submodules (IK, RL refs)
 scripts/                            run_env.py (load + play the env), build_controller.py (build the controller, no Isaac),
                                     run_stepping.py (stepping in place, walking, pushes), run_stepping_nocalib.py (spawned
@@ -107,9 +108,18 @@ project source to hand-edit, except where noted below.
 
 ### Package architecture (`source/MPC_Humanoid/MPC_Humanoid/`)
 
+- `actuators/bam_motor.py` — `BamMotor` / `BamMotorCfg`: the BAM (Better Actuator Models) voltage-controlled servo as
+  an explicit Isaac Lab actuator on PhysX (port of `bam.mjlab.BamActuator`; the venv's Isaac Lab has no `DriveBam`).
+  Each physics step: fractional command delay, firmware P loop to a PWM duty, `tau = kt V / R - kt² dq / R`, then the
+  m6 friction budget written to the PhysX joint as static = dynamic friction effort [N·m] (PhysX does the stiction
+  clipping); viscous friction is constant. `q_offset` of the fit (testbench error) is not modelled. It needs
+  `sim.use_newton_actuators = False` (otherwise Isaac Lab rejects a custom explicit actuator) and
+  `bind_bam_motors_event` as a startup event, both set in `env/robonion_env_cfg.py`. `external_torque_mode`
+  (load for the load-dependent friction) defaults to `projected` (-(torque the joint transmits), floating base ok);
+  `gravity` only works on fixed-base articulations.
 - `robots/robonionv2.py` — the single `Robonion_CFG` `ArticulationCfg`: USD asset
   path, initial pose (`DEFAULT_JOINT_POS` from `robots/robonion_params.py`), and
-  per-actuator-group `DCMotorCfg`/`ImplicitActuatorCfg` (one group per servo type and servo count, and
+  per-actuator-group `BamMotorCfg`/`ImplicitActuatorCfg` (one group per servo type and servo count, and
   the unpowered parallelogram back bars). This is the one
   source of truth every env/task imports the robot from.
 - `env/` — the plain (non-RL) `ManagerBasedEnvCfg` that the MPC controller drives
@@ -181,6 +191,13 @@ push the gait holds and restarts (no recovery step). Next proposed: servo identi
   armature needed T_ds 0.2 s and `MONITOR_TICKS` 3; Isaac push table 14/15 (+x 1.75 falls on seed 1, the other
   two hold 5-8 s), slip without push 3-4 mm per 10 steps (was ≤ 1.5 mm). Bisect and diagnosis in
   `docs/stage3.md`.
+- BAM servos (2026-11-09, uncommitted): every actuator group is a `BamMotorCfg` with the user's m6 fits (see *When
+  editing robot/task config*), controller rebuilt. Isaac push table (5 cases, seeds 0, 1, 2): no fall in 15/15 (was
+  14/15), no QP failures, tick 4.3-4.5 ms mean without push. But every push now holds the gait 5-8 s and 5-10 of 10
+  steps finish by 15 s with 20-57 mm slip, where -x 1.0, +y 1.0 and -y 0.5 used to finish 10 steps with ≤ 0.7 s hold
+  and 3-4.5 mm slip; without push 2 of 3 seeds hold 0.3-0.5 s (was 0), slip 3.9-4.6 mm (was ≤ 3.9). The cause is not
+  isolated (stiction holding the load, the stiffer K/D, or the monitor thresholds tuned on the old servo); next
+  proposed: ablate `friction_scale = 0` and `external_torque_mode = "motor_only"` on -x 1.0.
 - Walking: straight walking at a commanded speed with an ALIP footstep planner (user decision
   2026-10-09), built on `feat/movement-gait` (9a50d8f, 2cfe9f8, ad56ba0; `--vx`, `--ramp_steps` in
   `run_stepping.py`). `mpc/alip.py` gives the step change du about the plan; the controller removes a learned
@@ -330,12 +347,15 @@ Rules when working on this pipeline:
 ## When editing robot/task config
 
 - `robots/robonionv2.py` deliberately keeps the actuator model separate from the USD asset's raw
-  inertial/collision data — don't fold one into the other. The actuator model is one `DCMotorCfg`
-  per servo type and servo count, from `SERVOS` / `SERVO_JOINTS` in `robots/robonion_params.py`, which follow
-  the upstream URDF and `config/actuators.yaml` (user, 2026-10-15): XH540-W270 on hip roll, front thigh (2
-  servos), knee (2), front shin, ankle pitch and ankle roll; XM540-W270 on hip yaw, torso pitch, shoulders and
-  elbow pitch; XM430-W350 on elbow yaw and the head. 14.8 V figures, K = stall / 0.217 rad, armature and
-  friction BAM priors until the servos are identified. `mpc/model.py` and `mpc/nmpc.py` take the same values.
+  inertial/collision data — don't fold one into the other. The actuator model is one `BamMotorCfg`
+  (`actuators/bam_motor.py`) per servo type and servo count, from `SERVO_JOINTS` in `robots/robonion_params.py`
+  (the map follows the upstream URDF and `config/actuators.yaml`, user, 2026-10-15): XH540-W270 on hip roll, front
+  thigh (2 servos), knee (2), front shin, ankle pitch and ankle roll; XM540-W270 on hip yaw, torso pitch, shoulders
+  and elbow pitch; XM430-W350 on elbow yaw and the head. The servo parameters are the user's BAM m6 identifications
+  (`assets/servos/<servo>_m6.json`, 14.8 V, firmware Position P Gain 800 confirmed by the user on 2026-11-09).
+  `SERVOS` is derived from them (effort = kt V / R, velocity = V / kt, K = effort · P gain · error gain, i.e.
+  stall / 0.217 rad, D = kt² / R + viscous), so `mpc/model.py` and `mpc/nmpc.py` take the same values; to change a
+  servo, replace its JSON (do not edit numbers in the code) and rebuild the controller.
 - Knee and front shin carry servos (user, 2026-10-15, superseding "5 motors per leg"); their targets follow
   front thigh and ankle pitch through the parallelogram gain (`env/actions.py`, `CoupledJointPositionAction`),
   so each leg keeps 2 pitch DOF. The back bars (`*_back_thigh_pitch_joint`, `*_back_shin_pitch_joint`) are

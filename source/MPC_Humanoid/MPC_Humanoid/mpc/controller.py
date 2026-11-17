@@ -27,7 +27,6 @@ Isaac failure in docs/stage2.md; within STEP:
 
 from __future__ import annotations
 
-import copy
 import dataclasses
 import math
 from dataclasses import dataclass
@@ -36,11 +35,11 @@ from enum import Enum
 import numpy as np
 import pinocchio as pin
 
-from . import alip
+from .alip import FootholdAdapter
 from .ekf import LegKinematicsEkf, roll_pitch
 from .estimator import AhrsGyro, ContactModeMonitor, ContactProjectionEstimator
-from .gait import GaitParams, GaitPlan, swing_xy
-from .model import EDGE_MODES, GRAVITY, RigidContactModel
+from .gait import XY_DONE, GaitParams, GaitPlan, swing_xy
+from .model import EDGE_MODES, GRAVITY, RigidContactModel, wrap_angle, yaw_of
 from .nmpc import RobonionNMPC
 
 CROUCH = 0.2  # rad on front thigh and ankle pitch (negative, the LEG_CROUCH convention of robots/robonion_params.py)
@@ -71,26 +70,9 @@ CALM_DCM, CALM_SPEED, CALM_TIME = 0.01, 0.03, 0.2
 # NMPC at 100 Hz under the 200 Hz estimation and gait logic, so the edge and touchdown tuning stays at 5 ms
 # (docs/stage3.md, decision of 2026-10-07)
 NMPC_EVERY = 2
-# Walking: the ALIP foothold of a step is set once, at swing progress ALIP_AT. The offset of du is learned at
-# ALIP_RATE per step, ALIP_GAIN and ALIP_MAX [m] apply to what is left. At 0.1 m/s in Isaac du at progress 0.5 stayed
-# within +-5 mm of its offset from step to step: lateral +-31-37 mm per swing foot; sagittal ALIP_V_GAIN x the plan's
-# CoM velocity, 1.5-1.6 s at 0.05 and 0.1 m/s through the speed ramps (a constant offset lagged over the ramp, and a
-# 33 mm longer step put the stance sole on its toe). Learned only while the plan moves faster than ALIP_V_MIN [m/s].
-CATCH_UNTIL = 0.85  # swing progress; later the swing foot comes down vertically (gait.XY_DONE)
+CATCH_UNTIL = XY_DONE  # swing progress; later the swing foot comes down vertically (gait.XY_DONE)
 RESTART_DS = 0.6  # s, first double support after a hold while walking
 RESTART_STAGGER = 0.01  # m between the soles along x from which the leading foot steps back first
-ALIP_AT, ALIP_RATE, ALIP_GAIN, ALIP_MAX, ALIP_V_MIN = 0.5, 0.7, 0.5, 0.05, 0.01
-# The first two steps start from standing (lateral du -21 mm against -33 mm later): not learned
-ALIP_LEARN_FROM = 2
-# du offsets per swing progress, for a du away from ALIP_AT: the sagittal ratio fell from 1.2 s at 0.5 to 0.5 s at 0.7
-# and the lateral offset from +-30 to +-25 mm; step-to-step spread <= 5 mm (steady) and 13 mm (ramps) from 0.4 to 0.9,
-# 30-50 mm before 0.3 (0.05 and 0.1 m/s, docs/stage3.md). A du further than ALIP_OUTLIER [m] from its offset (a push)
-# is not learned.
-ALIP_BINS, ALIP_OUTLIER = (0.4, 0.5, 0.6, 0.7, 0.8, 0.9), 0.03
-
-
-def _wrap(a: float) -> float:
-    return (a + math.pi) % (2 * math.pi) - math.pi
 
 
 class State(Enum):
@@ -156,16 +138,17 @@ class RobonionController:
         self.dt = dt
         self.params = params or GaitParams()
 
-        self.model = RigidContactModel(self.act_names, self.q_crouch, compiled=True, build=build)
+        self.model = RigidContactModel(self.act_names, self.q_crouch, build=build)
         self.ind = [self.act_names.index(n) for n in self.model.joints]
-        self.ahrs = AhrsGyro(self.act_names, compiled=True, build=build)
+        self.ahrs = AhrsGyro(self.act_names, build=build)
         self.monitor = ContactModeMonitor(
             self.model, lead=MONITOR_LEAD, rate_ticks=MONITOR_TICKS, settle_ticks=MONITOR_SETTLE
         )
-        self.estimator = ContactProjectionEstimator(self.model, compiled=True, build=build)
+        self.estimator = ContactProjectionEstimator(self.model, build=build)
         self.nmpc = RobonionNMPC(self.model, build=build)
         self.nmpc.lock(arms=not arms, hip_yaw=not hip_yaw)
-        self.ekf = LegKinematicsEkf(self.act_names, compiled=True, build=build)
+        self.ekf = LegKinematicsEkf(self.act_names, build=build)
+        self._footholds = FootholdAdapter(self.model)
 
         self.reset()
 
@@ -189,14 +172,11 @@ class RobonionController:
 
         self._ctrl_modes = ["flat", "flat"]
         self._lift_xy = self._u_lift = None
+        self._home = self._mid = self._com0 = None
+        self._walking = False
         self._lift_step = [None, None]
         self._soles = None
-        self._alip_ref = None  # (step, plan before its ALIP foothold)
-        # learned du per progress bin: lateral per swing foot, sagittal per plan velocity
-        self._alip_table = {s: [None, None, None] for s in ALIP_BINS}
-        self._alip_offset = self._alip_table[ALIP_AT]
-        self._alip_learned = (None, set())  # (step, bins learned in it)
-        self._alip_held = False  # held or recovering since the last touchdown
+        self._footholds.reset()
         self._airborne: set[int] = set()
         self.state = State.STEP
         self._hold_since = None
@@ -247,7 +227,7 @@ class RobonionController:
             )
         # the monitor keeps the AHRS tilt its thresholds were tuned on; the projection starts from the EKF tilt
         R_base = self._ekf_base[2]
-        yaw = q_meas[5] = _wrap(math.atan2(R_base[1, 0], R_base[0, 0]) - self._yaw0)
+        yaw = q_meas[5] = wrap_angle(yaw_of(R_base) - self._yaw0)
         meas = (joints, *roll_pitch(R_base), joints_d, roll_d, pitch_d, yaw, yaw_d)
         if any(changed):
             self._cfg = self.model.contact_config(*modes)
@@ -263,10 +243,7 @@ class RobonionController:
             q, qd = self._estimate(meas)
 
         tp = self.t - GAIT_START
-        solve_time = qp_status = None
-        u = self._gait(tp, q, qd, list(modes))
-        if isinstance(u, tuple):
-            u, qp_status, solve_time = u
+        u, qp_status, solve_time = self._gait(tp, q, qd, list(modes))
 
         self.u = u
         self.q_des[self.ind] = self.u
@@ -296,7 +273,7 @@ class RobonionController:
         """EKF world -> model world: the model's yaw 0 is the current heading, its origin is set by the standing
         pose."""
         pos, _, R_base = self._ekf_base
-        yaw = self._yaw0 = math.atan2(R_base[1, 0], R_base[0, 0])
+        yaw = self._yaw0 = yaw_of(R_base)
         c, s = math.cos(yaw), math.sin(yaw)
         Rz = np.array([[c, s, 0.0], [-s, c, 0.0], [0.0, 0.0, 1.0]])
         self._ekf_frame = (Rz, q_stand[:3] - Rz @ pos)
@@ -312,7 +289,7 @@ class RobonionController:
         x, y, z, w = np.asarray(imu_quat_xyzw, dtype=float) / np.linalg.norm(imu_quat_xyzw)
         R_ib = self.ekf.R.T @ self._ekf_base[2]
         R_base = pin.Quaternion(w, x, y, z).matrix() @ R_ib
-        yaw = math.atan2(R_base[1, 0], R_base[0, 0])
+        yaw = yaw_of(R_base)
         R_base = pin.rpy.rpyToMatrix(roll - self._bias[0], pitch - self._bias[1], yaw)
         self._ekf_base = self.ekf.reinit(q_act, qd_act, R_base @ R_ib.T)
         self._align_ekf(q_stand)
@@ -351,11 +328,10 @@ class RobonionController:
                 if k is not None and t >= next(p.t0 for p in self.plan.phases if p.step == k):
                     self.plan.replan(k, self._soles[:2, i])
                 self._lift_step[i] = None
-                self._alip_held = False
+                self._footholds.held = False
         self._ctrl_modes = list(modes)
         if self._walking and self.state == State.STEP:
-            self._alip(t, q, qd)
-            self._learn_offsets(t, q, qd)
+            self._footholds.update(t, q, qd, self.plan, self._soles, self._lift_xy)
 
         self._retime(t, modes)
         planned = self.plan.modes(t)
@@ -367,14 +343,14 @@ class RobonionController:
             for i, m in enumerate(modes)
         )
         self._transition(t, q, qd, now)
-        self._alip_held |= self.state != State.STEP
+        self._footholds.held |= self.state != State.STEP
 
         if self.state == State.RESET:
-            return u + np.clip(self.nmpc.u_nom - u, -RESET_RATE * self.dt, RESET_RATE * self.dt)
+            return u + np.clip(self.nmpc.u_nom - u, -RESET_RATE * self.dt, RESET_RATE * self.dt), None, None
         if self.state == State.HOLD:
-            return u
+            return u, None, None
         if self.state == State.CATCH:
-            return self._catch(t, now)
+            return self._catch(t, now), None, None
         return self._run_nmpc(t, q, qd, now)
 
     def _restart(self, t):
@@ -407,7 +383,7 @@ class RobonionController:
         self._airborne = set()
         self._lift_step = [None, None]
         self._lift_xy = feet.copy()
-        self._alip_ref = None
+        self._footholds.restart()
 
     def _transition(self, t, q, qd, now):
         """Next state from the contact modes of this tick (see State)."""
@@ -455,83 +431,6 @@ class RobonionController:
             else:
                 self._pause(t, force=True)
 
-    def _alip(self, t, q, qd):
-        """Foothold of the swinging foot: nominal plus the ALIP feedback (alip.py) about the learned orbit. The last
-        step too: without it the CoM ran 30% faster than the plan sideways into the stop and fell (0.1 m/s)."""
-        plan = self.plan
-        ph = plan.phase(t)
-        k = ph.step
-        if k is None or (t - ph.t0) / ph.t_nom < ALIP_AT:
-            return
-        if self._alip_ref is not None and self._alip_ref[0] == k:
-            return
-        self._alip_ref = (k, copy.deepcopy(plan))
-        if self._alip_held:
-            # the plan was paused: its reference CoM velocity is not the robot's, du read -0.1 m for a step that
-            # then landed behind the stance foot (0.1 m/s, 2026-10-17)
-            return
-        du, v = self._alip_du(t, q, qd, plan, ph)
-        i = ph.swing
-        fb = np.zeros(2)
-        if k >= ALIP_LEARN_FROM:
-            off = self._alip_offset
-            offset = du[1] if off[i] is None else off[i]
-            fb[1] = np.clip(ALIP_GAIN * (du[1] - offset), -ALIP_MAX, ALIP_MAX)
-            if off[2] is not None:
-                fb[0] = np.clip(ALIP_GAIN * (du[0] - off[2] * v), -ALIP_MAX, ALIP_MAX)
-            off[i] = offset + ALIP_RATE * (du[1] - offset)
-            if abs(v) > ALIP_V_MIN:
-                off[2] = du[0] / v if off[2] is None else off[2] + ALIP_RATE * (du[0] / v - off[2])
-        self._move_foothold(t, ph, plan, fb)
-
-    def _learn_offsets(self, t, q, qd):
-        """du offsets of the bins other than ALIP_AT (learned in _alip), once per step as the swing passes them."""
-        ph = self.plan.phase(t)
-        k = ph.step
-        if k is None or k < ALIP_LEARN_FROM or self._alip_held:
-            return
-        if self._alip_learned[0] != k:
-            self._alip_learned = (k, set())
-        prog = (t - ph.t0) / ph.t_nom
-        due = [b for b in ALIP_BINS if b != ALIP_AT and b <= prog < b + 0.1 and b not in self._alip_learned[1]]
-        if not due:
-            return
-        self._alip_learned[1].add(due[0])
-        ref = self._alip_ref[1] if self._alip_ref is not None and self._alip_ref[0] == k else self.plan
-        du, v = self._alip_du(t, q, qd, ref, ph)
-        off, i = self._alip_table[due[0]], ph.swing
-        if off[i] is None or abs(du[1] - off[i]) < ALIP_OUTLIER:
-            off[i] = du[1] if off[i] is None else off[i] + ALIP_RATE * (du[1] - off[i])
-        if abs(v) > ALIP_V_MIN and (off[2] is None or abs(du[0] - off[2] * v) < ALIP_OUTLIER):
-            off[2] = du[0] / v if off[2] is None else off[2] + ALIP_RATE * (du[0] / v - off[2])
-
-    def _alip_du(self, t, q, qd, plan, ph):
-        """ALIP step change du about the reference of plan, and the plan's sagittal CoM velocity."""
-        r = plan.reference(t)
-        stance = self._soles[:2, 1 - ph.swing]
-        com, comd = np.array(self.model.f_com(q)).ravel(), np.array(self.model.f_comd(q, qd)).ravel()
-        h = self.model.Ag @ qd
-        lm = comd[:2] + np.array([h[1], -h[0]]) * plan.omega**2 / (GRAVITY * self.model.mass)
-        du = alip.step_change(
-            com[:2] - stance - (r["com"] - plan.stance_xy(ph.step)),
-            lm - r["com_vel"],
-            ph.t1 - t + 0.5 * plan.p.t_ds,
-            plan.p.t_ss + plan.p.t_ds,
-            plan.omega,
-        )
-        return du, r["com_vel"][0]
-
-    def _move_foothold(self, t, ph, ref, fb):
-        """Foothold of the current step to the stance sole + (nominal step of plan ref) + fb, within the step limits."""
-        k, i, plan = ph.step, ph.swing, self.plan
-        stance = self._soles[:2, 1 - i]
-        old = plan.footholds[k].copy()
-        plan.replan(k, stance + alip.clamp_step(ref.footholds[k] - ref.stance_xy(k) + fb, i == 0))
-        # the swing reference stays continuous: swing_xy is linear in its lift and target points
-        f = swing_xy(np.zeros(2), np.ones(2), (t - ph.t0) / ph.t_nom)[0]
-        if f < 1.0:
-            self._lift_xy[i] -= (plan.footholds[k] - old) * f / (1.0 - f)
-
     def _resting(self, t):
         """A sole on an edge whose tilt stayed within STILL_SPAN for STILL_TIME."""
         span = np.ptp(np.array([h for _, h in self._tilt_hist]), axis=0)
@@ -564,7 +463,7 @@ class RobonionController:
                 # linearise for the next NMPC tick now that this tick's targets are known
                 self.nmpc.prepare(q, qd, self._nodes(t + self.dt, now))
                 self._prepared = (now, True)
-            return self.u + self._v * self.dt
+            return self.u + self._v * self.dt, None, None
 
         deferred, self._deferred = self._deferred, False
         if self._prepared != (now, True) and not deferred:
@@ -574,7 +473,7 @@ class RobonionController:
             self._prepared = (now, True)
             self._since_nmpc = NMPC_EVERY - 1
             self._deferred = True
-            return self.u + self._v * self.dt
+            return self.u + self._v * self.dt, None, None
 
         # after a deferral the feedback runs even if the modes changed again (contact flicker): deferring again
         # left the targets open loop for up to 25 ticks offline, a full solve instead went over the tick
@@ -629,9 +528,7 @@ class RobonionController:
         cur = plan.index(t)
         # the DCM reference stays the one of the plan at the start of the step: following the ALIP footholds, it
         # pulled the CoM after the moved foothold and the foothold moved further (fell backwards in Isaac)
-        ref_plan = (
-            self._alip_ref[1] if self._alip_ref is not None and self._alip_ref[0] == plan.phases[cur].step else plan
-        )
+        ref_plan = self._footholds.reference_plan(plan, plan.phases[cur].step)
         for tk in t + self.nmpc.t_nodes:
             r = ref_plan.reference(tk)
             j = plan.index(tk)

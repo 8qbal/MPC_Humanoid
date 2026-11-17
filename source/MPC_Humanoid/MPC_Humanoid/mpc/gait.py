@@ -4,14 +4,12 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """
-
 Gait plan: contact schedule, footholds, DCM / CoM reference and swing-foot height.
 
 Each single support k swings one foot to footholds[k]. Nominally a step lands step_length(k) ahead of the stance
 foot at the initial foot spacing: zero for stepping in place (vx = vy = 0); walking ramps the step length up over the
 first ramp_steps steps and down to zero (feet side by side) over the last ones. replan() moves a foothold (ALIP, or
 the measured landing) and every later one with it.
-
 """
 
 from __future__ import annotations
@@ -22,6 +20,8 @@ from dataclasses import dataclass
 import numpy as np
 
 from .model import GRAVITY
+
+XY_DONE = 0.85
 
 
 @dataclass
@@ -228,6 +228,3 @@ def swing_xy(lift: np.ndarray, target: np.ndarray, s: float) -> np.ndarray:
     comes down vertically."""
     r = min(max(s / XY_DONE, 0.0), 1.0)
     return lift + (target - lift) * r**3 * (10 - 15 * r + 6 * r * r)
-
-
-XY_DONE = 0.85

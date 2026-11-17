@@ -190,7 +190,7 @@ push the gait holds and restarts (no recovery step). Next proposed: servo identi
   proposed: ablate `friction_scale = 0` and `external_torque_mode = "motor_only"` on -x 1.0.
 - Walking: straight walking at a commanded speed with an ALIP footstep planner (user decision
   2026-10-09), built on `feat/movement-gait` (9a50d8f, 2cfe9f8, ad56ba0; `--vx`, `--ramp_steps` in
-  `run_stepping.py`). `mpc/alip.py` gives the step change du about the plan; the controller removes a learned
+  `run_stepping.py`). `mpc/alip.py` gives the step change du about the plan; its `FootholdAdapter` removes a learned
   offset per swing foot (`ALIP_BINS` per swing progress) and uses du as step-to-step feedback. After a hold it
   restarts with a new plan from the current soles.
   - `W_DCM = 1000` (was 100, ad56ba0): at 100 the servo-rate cost kept the planned DCM 19 mm RMS behind the walking
@@ -232,12 +232,11 @@ Known issues from stage 2, listed under *Open* in `docs/stage2.md`:
   imports, so `mpc/` runs on the Jetson) — never duplicate them.
 - `estimator.py`: `AhrsGyro`, `ContactModeMonitor` (contact mode per foot from sole tilt,
   tilt rate, sole height and the model-predicted normal force; there is no contact
-  sensing), `ContactProjectionEstimator` (state on the contact manifold). `compiled=True`
-  (used by `controller.py`) runs `RigidContactModel`, `AhrsGyro` and the estimator as generated C.
+  sensing), `ContactProjectionEstimator` (state on the contact manifold). `RigidContactModel`, `AhrsGyro`
+  and the estimator run as generated C (the Pinocchio / numpy versions were removed, see git history).
 - `ekf.py`: `LegKinematicsEkf` (Bloesch et al. 2012): base position, velocity and orientation, and one
   contact point per sole. Its inputs are the IMU, the leg kinematics, the AHRS tilt and the monitor's
-  contact modes. `compiled=True` (used by `controller.py`) generates the leg kinematics and their
-  Jacobian as C (`robonion_ekf_<hash>.so`).
+  contact modes. The leg kinematics and their Jacobian are generated C (`robonion_ekf_<hash>.so`).
 - `nmpc.py`: `RobonionNMPC`, acados SQP-RTI NMPC, outputs servo targets. The caller passes the
   plan per node (contact modes, DCM / CoM-velocity and swing-sole references); edge modes are
   never planned. Per-node references and gates are parameters, compiled contact algebra, RTI

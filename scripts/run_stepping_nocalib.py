@@ -60,9 +60,7 @@ class UncalibratedController(controller.RobonionController):
 controller.CROUCH = 0.0
 controller.CALIBRATION_START = 0.0
 controller.GAIT_START = 1.5 * 0.005  # one 5 ms tick collects the initial pose, the gait starts on the next
-main.__globals__["MpcHumanoidRobonionEnvCfg"] = CrouchedEnvCfg
-main.__globals__["RobonionController"] = UncalibratedController
 
 if __name__ == "__main__":
-    main()
+    main(CrouchedEnvCfg, UncalibratedController)
     g["simulation_app"].close()

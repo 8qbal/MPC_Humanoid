@@ -77,6 +77,11 @@ PASSIVE_COUPLING = {
     "front_shin_pitch_joint": ("ankle_pitch_joint", -1.0),
     "back_shin_pitch_joint": ("ankle_pitch_joint", -1.0),
 }
+PASSIVE_JOINTS = {
+    f"{side}_{follower}": (f"{side}_{lead}", gain)
+    for side in ("left", "right")
+    for follower, (lead, gain) in PASSIVE_COUPLING.items()
+}
 
 
 def scaled(servo: Servo, count: int) -> Servo:

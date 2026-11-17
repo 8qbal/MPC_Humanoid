@@ -23,14 +23,17 @@ import casadi as ca
 import numpy as np
 import pinocchio as pin
 
+from MPC_Humanoid.robots.robonion_params import PASSIVE_JOINTS
+
 from .model import (
     CONTACT_MODES,
     CONTROLLER_URDF,
     GRAVITY,
-    JOINT_AXES,
-    PASSIVE_COUPLING,
     compile_functions,
-    rot_axis,
+    rotation_from_xyzw,
+    symbolic_fk,
+    wrap_angle,
+    yaw_of,
 )
 
 _G = np.array([0.0, 0.0, -GRAVITY])
@@ -38,17 +41,9 @@ _R, _V, _PHI, _P, _BF, _BW = 0, 3, 6, 9, 15, 18
 _N = 21
 
 
-def _yaw(R: np.ndarray) -> float:
-    return float(np.arctan2(R[1, 0], R[0, 0]))
-
-
 def roll_pitch(R: np.ndarray) -> np.ndarray:
     """Roll and pitch of R = Rz(yaw) Ry(pitch) Rx(roll), the AhrsGyro convention; independent of yaw."""
     return np.array([np.arctan2(R[2, 1], R[2, 2]), -np.arcsin(np.clip(R[2, 0], -1.0, 1.0))])
-
-
-def _wrap(a: float) -> float:
-    return float((a + np.pi) % (2 * np.pi) - np.pi)
 
 
 def _skew(a: np.ndarray) -> np.ndarray:
@@ -84,19 +79,11 @@ class LegKinematicsEkf:
         yaw_std: float = np.radians(1.0),
         tilt_std: float = np.radians(0.02),
         estimate_bias: bool = False,
-        compiled: bool = False,
         build: bool = False,
     ):
         self.act_names = list(act_names)
         self.model = pin.buildModelFromUrdf(CONTROLLER_URDF, pin.JointModelFreeFlyer())
-        self.data = self.model.createData()
 
-        self._idx_q = np.array([self.model.joints[self.model.getJointId(n)].idx_q for n in self.act_names])
-        self._passive = []  # (idx_q, index into the actuated vector, gain)
-        for side in ("left", "right"):
-            for passive, (active, gain) in PASSIVE_COUPLING.items():
-                j = self.model.joints[self.model.getJointId(f"{side}_{passive}")]
-                self._passive.append((j.idx_q, self.act_names.index(f"{side}_{active}"), gain))
         self._imu = self.model.getFrameId("imu_link")
         self._feet = [self.model.getFrameId(f"{side}_foot_roll_link") for side in ("left", "right")]
 
@@ -109,29 +96,20 @@ class LegKinematicsEkf:
         self.estimate_bias = estimate_bias
         order = sorted(self.act_names)
         self._perm = np.array([self.act_names.index(n) for n in order])
-        self._f = self._compile(order, build) if compiled else None
+        self._f = self._compile(order, build)
         self.reset()
 
     def _compile(self, act_names: list[str], build: bool) -> ca.Function:
         m, n = self.model, len(act_names)
         q_act, qd_act, pts = ca.SX.sym("q_act", n), ca.SX.sym("qd_act", n), ca.SX.sym("points", 6)
 
-        R, p = {1: ca.DM.eye(3)}, {1: ca.DM.zeros(3)}  # base frame
-        for j in range(2, m.njoints):
-            name, joint = m.names[j], m.joints[j]
+        def joint_angle(name):
             if name in act_names:
-                qj = q_act[act_names.index(name)]
-            else:
-                side, rest = name.split("_", 1)
-                active, gain = PASSIVE_COUPLING[rest]
-                qj = gain * q_act[act_names.index(f"{side}_{active}")]
-            sn = joint.shortname()
-            axis = (
-                tuple(float(a) for a in joint.extract().axis) if sn == "JointModelRevoluteUnaligned" else JOINT_AXES[sn]
-            )
-            P, par = m.jointPlacements[j], m.parents[j]
-            p[j] = p[par] + R[par] @ ca.DM(P.translation)
-            R[j] = R[par] @ ca.DM(P.rotation) @ rot_axis(axis, qj)
+                return q_act[act_names.index(name)]
+            active, gain = PASSIVE_JOINTS[name]
+            return gain * q_act[act_names.index(active)]
+
+        R, p = symbolic_fk(m, joint_angle, ca.DM.eye(3), ca.DM.zeros(3))  # base frame
 
         def frame(fid):
             f = m.frames[fid]
@@ -162,41 +140,17 @@ class LegKinematicsEkf:
         self._r_lin = self._v_lin = self._R_lin = None  # first-estimate linearization point (a priori state)
         self._p_lin = np.zeros((2, 3))
 
-    def _kinematics(self, q_act: np.ndarray, points: list[np.ndarray]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """
-        Contact points in the IMU frame (2 x 3) and the base pose in the IMU frame (R_ib, p_ib).
-        """
-        q = pin.neutral(self.model)
-        q[self._idx_q] = q_act
-        for idx_q, src, gain in self._passive:
-            q[idx_q] = gain * q_act[src]
-        pin.framesForwardKinematics(self.model, self.data, q)
-        imu = self.data.oMf[self._imu]
-        s = np.array([imu.actInv(self.data.oMf[f].act(c)) for f, c in zip(self._feet, points)])
-        return s, imu.rotation.T, -imu.rotation.T @ imu.translation
-
     def _kin(self, q_act: np.ndarray, qd_act: np.ndarray, points: list[np.ndarray]):
         """
         Contact points in the IMU frame (2 x 3), their Jacobian in the joints (2 x 3 x n), the base pose in the
         IMU frame (R_ib, p_ib) and the rate of p_ib (the base moves relative to the IMU through torso pitch).
         """
-        if self._f is not None:
-            s, Js, R_ib, p_ib, p_ib_d = (
-                np.array(o) for o in self._f(q_act[self._perm], qd_act[self._perm], np.r_[points[0], points[1]])
-            )
-            J = np.empty((6, len(q_act)))
-            J[:, self._perm] = Js
-            return s.reshape(2, 3), J.reshape(2, 3, -1), R_ib, p_ib.ravel(), p_ib_d.ravel()
-
-        eps = 1e-6
-        s, R_ib, p_ib = self._kinematics(q_act, points)
-        J = np.zeros((2, 3, len(q_act)))
-        for k in range(len(q_act)):
-            dq = q_act.copy()
-            dq[k] += eps
-            J[:, :, k] = (self._kinematics(dq, points)[0] - s) / eps
-        p_ib_d = (self._kinematics(q_act + eps * qd_act, points)[2] - p_ib) / eps
-        return s, J, R_ib, p_ib, p_ib_d
+        s, Js, R_ib, p_ib, p_ib_d = (
+            np.array(o) for o in self._f(q_act[self._perm], qd_act[self._perm], np.r_[points[0], points[1]])
+        )
+        J = np.empty((6, len(q_act)))
+        J[:, self._perm] = Js
+        return s.reshape(2, 3), J.reshape(2, 3, -1), R_ib, p_ib.ravel(), p_ib_d.ravel()
 
     def _kinematics_cov(self, J: np.ndarray) -> np.ndarray:
         """
@@ -288,16 +242,16 @@ class LegKinematicsEkf:
             H[rows, _P + 3 * i : _P + 3 * i + 3] = self._R_lin.T
             Rk[rows, rows] = S[i]
         k = 3 * len(feet)
-        y[k] = _wrap(_yaw(R_ahrs) - _yaw(self.R))
+        y[k] = wrap_angle(yaw_of(R_ahrs) - yaw_of(self.R))
         eps = 1e-6
         H[k, _PHI : _PHI + 3] = [
-            _wrap(_yaw(pin.exp3(eps * e) @ self._R_lin) - _yaw(self._R_lin)) / eps for e in np.eye(3)
+            wrap_angle(yaw_of(pin.exp3(eps * e) @ self._R_lin) - yaw_of(self._R_lin)) / eps for e in np.eye(3)
         ]
         Rk[k, k] = self.Ryaw
         if tilt is not None:
             rows = slice(k + 1, k + 3)
             rp = roll_pitch(self._R_lin @ R_ib)
-            y[rows] = [_wrap(a) for a in np.asarray(tilt) - roll_pitch(self.R @ R_ib)]
+            y[rows] = [wrap_angle(a) for a in np.asarray(tilt) - roll_pitch(self.R @ R_ib)]
             H[rows, _PHI : _PHI + 3] = (
                 np.array([roll_pitch(pin.exp3(eps * e) @ self._R_lin @ R_ib) - rp for e in np.eye(3)]).T / eps
             )
@@ -335,8 +289,7 @@ class LegKinematicsEkf:
         s, J, R_ib, p_ib, p_ib_d = self._kin(q_act, qd_act, points)
         contact = [m != "air" for m in modes]
 
-        x, y, z, w = (float(c) for c in imu_quat_xyzw / np.linalg.norm(imu_quat_xyzw))
-        R_ahrs = pin.Quaternion(w, x, y, z).matrix()
+        R_ahrs = rotation_from_xyzw(imu_quat_xyzw)
         if self.r is None:
             self.modes = list(modes)
             self._init(s, R_ahrs, contact)

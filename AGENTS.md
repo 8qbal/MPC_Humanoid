@@ -130,8 +130,8 @@ adaptation. Known issues, all listed under *Open* in `docs/stage2.md`:
   imports, so `mpc/` runs on the Jetson) — never duplicate them.
 - `estimator.py`: `AhrsGyro`, `ContactModeMonitor` (contact mode per foot from sole tilt,
   tilt rate, sole height and the model-predicted normal force; there is no contact
-  sensing), `ContactProjectionEstimator` (state on the contact manifold). `compiled=True`
-  (used by `controller.py`) runs `RigidContactModel`, `AhrsGyro` and the estimator as generated C.
+  sensing), `ContactProjectionEstimator` (state on the contact manifold). `RigidContactModel`, `AhrsGyro`
+  and the estimator run as generated C (the Pinocchio / numpy versions were removed, see git history).
 - `nmpc.py`: `RobonionNMPC`, acados SQP-RTI NMPC, outputs servo targets. The caller passes the
   plan per node (contact modes, DCM / CoM-velocity and swing-sole references); edge modes are
   never planned. Per-node references and gates are parameters, compiled contact algebra, RTI

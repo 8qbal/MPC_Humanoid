@@ -19,6 +19,7 @@ Usage:
 
 import argparse
 import dataclasses
+import json
 import os
 import sys
 import time
@@ -40,8 +41,11 @@ def main() -> None:
     args = parser.parse_args()
 
     d = np.load(args.record)
-    t_ss, t_ds, clearance, n_steps = d["params"]
-    params = GaitParams(t_ss=float(t_ss), t_ds=float(t_ds), clearance=float(clearance), n_steps=int(n_steps))
+    if "gait" in d:
+        params = GaitParams(**json.loads(d["gait"].item()))
+    else:
+        t_ss, t_ds, clearance, n_steps = d["params"]
+        params = GaitParams(t_ss=float(t_ss), t_ds=float(t_ds), clearance=float(clearance), n_steps=int(n_steps))
     if args.vx is not None:
         params = dataclasses.replace(params, vx=args.vx)
     inputs = [d[k].astype(np.float32) for k in ("q_act", "qd_act", "quat", "gyro", "accel")]

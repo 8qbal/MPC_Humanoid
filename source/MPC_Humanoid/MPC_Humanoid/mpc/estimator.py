@@ -20,14 +20,13 @@ import casadi as ca
 import numpy as np
 import pinocchio as pin
 
+from MPC_Humanoid.robots.robonion_params import PASSIVE_JOINTS
+
 from .model import (
     CONTROLLER_URDF,
     JOINT_AXES,
-    PASSIVE_COUPLING,
     RigidContactModel,
     compile_functions,
-    landing_mode,
-    leaves_edge,
     rot_axis,
 )
 
@@ -39,24 +38,13 @@ class AhrsGyro:
     compiled: the same computation as one generated C function (Pinocchio took ~0.2 ms per tick). Its inputs are in
     sorted joint-name order, so the build does not depend on the order the caller delivers the joints in."""
 
-    def __init__(self, act_names: list[str], compiled: bool = False, build: bool = False):
+    def __init__(self, act_names: list[str], build: bool = False):
         act_names = list(act_names)
         self.model = pin.buildModelFromUrdf(CONTROLLER_URDF, pin.JointModelFreeFlyer())
-        self.data = self.model.createData()
-
-        act = [self.model.joints[self.model.getJointId(n)] for n in act_names]
-        self._act_idx_q = np.array([j.idx_q for j in act])
-        self._act_idx_v = np.array([j.idx_v for j in act])
-        self._passive = []  # (idx_q, idx_v, index into the actuated vector, gain)
-        for side in ("left", "right"):
-            for passive, (active, gain) in PASSIVE_COUPLING.items():
-                j = self.model.joints[self.model.getJointId(f"{side}_{passive}")]
-                self._passive.append((j.idx_q, j.idx_v, act_names.index(f"{side}_{active}"), gain))
-
         self._imu = self.model.getFrameId("imu_link")
         order = sorted(act_names)
         self._perm = np.array([act_names.index(n) for n in order])
-        self._f = self._compile(order, build) if compiled else None
+        self._f = self._compile(order, build)
 
     def _compile(self, act_names: list[str], build: bool) -> ca.Function:
         m, n = self.model, len(act_names)
@@ -68,9 +56,8 @@ class AhrsGyro:
             if name in act_names:
                 qj = q_act[act_names.index(name)]
             else:
-                side, rest = name.split("_", 1)
-                active, gain = PASSIVE_COUPLING[rest]
-                qj = gain * q_act[act_names.index(f"{side}_{active}")]
+                active, gain = PASSIVE_JOINTS[name]
+                qj = gain * q_act[act_names.index(active)]
             R = ca.DM(m.jointPlacements[j].rotation) @ rot_axis(JOINT_AXES[m.joints[j].shortname()], qj) @ R
             j = m.parents[j]
 
@@ -94,40 +81,31 @@ class AhrsGyro:
         f = ca.Function("ahrs", [q_act, qd_act, quat, gyro], [ca.vertcat(roll, pitch, roll_d, w_world[1], yaw_d)])
         return compile_functions([f], "robonion_ahrs", build)["ahrs"]
 
-    def _configuration(self, q_act: np.ndarray, base_rotation: np.ndarray = np.eye(3)) -> np.ndarray:
-        q = pin.neutral(self.model)
-        q[3:7] = pin.Quaternion(base_rotation).coeffs()
-        q[self._act_idx_q] = q_act
-        for idx_q, _, src, gain in self._passive:
-            q[idx_q] = gain * q_act[src]
-        return q
-
     def __call__(
         self, q_act: np.ndarray, qd_act: np.ndarray, imu_quat_xyzw: np.ndarray, gyro: np.ndarray
     ) -> tuple[float, float, float, float, float]:
         """(roll, pitch, roll rate, pitch rate, yaw rate) of the pelvis."""
-        if self._f is not None:
-            r = np.array(self._f(q_act[self._perm], qd_act[self._perm], imu_quat_xyzw, gyro)).ravel()
-            return float(r[0]), float(r[1]), float(r[2]), float(r[3]), float(r[4])
+        r = np.array(self._f(q_act[self._perm], qd_act[self._perm], imu_quat_xyzw, gyro)).ravel()
+        return float(r[0]), float(r[1]), float(r[2]), float(r[3]), float(r[4])
 
-        pin.framesForwardKinematics(self.model, self.data, self._configuration(q_act))
-        R_base_imu = self.data.oMf[self._imu].rotation
-        x, y, z, w = (float(v) for v in imu_quat_xyzw / np.linalg.norm(imu_quat_xyzw))
-        R = pin.Quaternion(w, x, y, z).matrix() @ R_base_imu.T
-        R = pin.utils.rotate("z", -math.atan2(R[1, 0], R[0, 0])) @ R
-        roll, pitch = math.atan2(R[2, 1], R[2, 2]), -math.asin(float(np.clip(R[2, 0], -1.0, 1.0)))
 
-        v = np.zeros(self.model.nv)
-        v[self._act_idx_v] = qd_act
-        for _, idx_v, src, gain in self._passive:
-            v[idx_v] = gain * qd_act[src]
-        pin.computeJointJacobians(self.model, self.data, self._configuration(q_act, R))
-        J = pin.getFrameJacobian(self.model, self.data, self._imu, pin.LOCAL)[3:]
-        w_world = R @ np.linalg.solve(J[:, 3:6], gyro - J[:, 6:] @ v[6:])
-        # w = pitch_rate e_y + roll_rate Ry(pitch) e_x (+ yaw rate, ignored)
-        A = np.c_[[math.cos(pitch), 0.0, -math.sin(pitch)], [0.0, 1.0, 0.0]]
-        roll_d, pitch_d = np.linalg.lstsq(A, w_world, rcond=None)[0]
-        return roll, pitch, float(roll_d), float(pitch_d), float(w_world[2] + math.sin(pitch) * roll_d)
+def landing_mode(roll: float, pitch: float, tilt_on: float) -> str:
+    """Mode of a foot that touches down with the given sole tilt: level -> flat, else the lower edge."""
+    if max(abs(roll), abs(pitch)) < tilt_on:
+        return "flat"
+    if abs(roll) >= abs(pitch):
+        return "left_edge" if roll < 0 else "right_edge"
+    return "toe" if pitch > 0 else "heel"
+
+
+def leaves_edge(mode: str, roll: float, pitch: float) -> bool:
+    """True once a foot rolling on an edge is level again (its tilt crossed zero)."""
+    return (
+        (mode == "toe" and pitch <= 0)
+        or (mode == "heel" and pitch >= 0)
+        or (mode == "left_edge" and roll >= 0)
+        or (mode == "right_edge" and roll <= 0)
+    )
 
 
 def _edge(roll: float, pitch: float, on: float) -> str | None:
@@ -295,13 +273,12 @@ class ContactProjectionEstimator:
         model: RigidContactModel,
         w_tilt: float = 0.01,
         iters: int = 2,
-        compiled: bool = False,
         build: bool = False,
     ):
         self.m, self.iters = model, iters
         self.w = np.r_[np.full(3, 1e-8), np.full(model.nb - 3, w_tilt), np.ones(model.nj)]
         self.q: np.ndarray | None = None
-        self._f = self._compile(build) if compiled else None
+        self._f = self._compile(build)
 
     def _compile(self, build: bool) -> ca.Function:
         m, n = self.m, self.m.nq
@@ -327,14 +304,6 @@ class ContactProjectionEstimator:
     def reset(self):
         self.q = None
 
-    def _kkt(self, J: np.ndarray, rhs_top: np.ndarray, rhs_bot: np.ndarray) -> np.ndarray:
-        n, k = self.m.nq, J.shape[0]
-        K = np.zeros((n + k, n + k))
-        K[:n, :n] = np.diag(self.w)
-        K[:n, n:] = J.T
-        K[n:, :n] = J
-        return np.linalg.solve(K, np.r_[rhs_top, rhs_bot])[:n]
-
     def update(
         self,
         joints: np.ndarray,
@@ -350,7 +319,6 @@ class ContactProjectionEstimator:
         yaw_d: float = 0.0,
     ) -> tuple[np.ndarray, np.ndarray]:
         """yaw, yaw_d: base yaw and its rate, used by a model with yaw."""
-        a = np.asarray(flags) > 0.5
         m = self.m
         ori, ori_d = ([roll, pitch, yaw], [roll_d, pitch_d, yaw_d]) if m.yaw else ([roll, pitch], [roll_d, pitch_d])
         qm = np.r_[0.0, 0.0, 0.0, ori, joints]
@@ -358,19 +326,6 @@ class ContactProjectionEstimator:
             self.q = qm.copy()
             self.q[2] = -np.array(m.f_crow(qm, pc)).ravel()[[2, m.nr + 2]].mean()
 
-        if self._f is not None:
-            q, qd = self._f(self.q[:3], qm[3:], np.r_[ori_d, joints_d], flags, cref, pc)
-            self.q = np.array(q).ravel()
-            return self.q, np.array(qd).ravel()
-
-        q = np.r_[self.q[:3], qm[3:]]
-        qm[:3] = self.q[:3]
-        for _ in range(self.iters):
-            c = np.array(self.m.f_crow(q, pc)).ravel()[a] - np.asarray(cref)[a]
-            J = np.array(self.m.f_Jc(q, pc))[a]
-            q = q + self._kkt(J, self.w * (qm - q), -c)
-
-        J = np.array(self.m.f_Jc(q, pc))[a]
-        qd = self._kkt(J, self.w * np.r_[0.0, 0.0, 0.0, ori_d, joints_d], np.zeros(a.sum()))
-        self.q = q
-        return q, qd
+        q, qd = self._f(self.q[:3], qm[3:], np.r_[ori_d, joints_d], flags, cref, pc)
+        self.q = np.array(q).ravel()
+        return self.q, np.array(qd).ravel()

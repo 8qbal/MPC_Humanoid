@@ -24,14 +24,16 @@ form, lambda(q, qd, u).
 from __future__ import annotations
 
 import hashlib
+import math
 import os
 import subprocess
+from collections.abc import Callable
 
 import casadi as ca
 import numpy as np
 import pinocchio as pin
 
-from MPC_Humanoid.robots.robonion_params import PASSIVE_COUPLING, drive_of
+from MPC_Humanoid.robots.robonion_params import PASSIVE_JOINTS, drive_of
 
 CONTROLLER_URDF = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "../../../../assets/robonionv2_controller.urdf")
@@ -87,23 +89,33 @@ def rot_axis(axis, angle):
     )
 
 
-def landing_mode(roll: float, pitch: float, tilt_on: float) -> str:
-    """Mode of a foot that touches down with the given sole tilt: level -> flat, else the lower edge."""
-    if max(abs(roll), abs(pitch)) < tilt_on:
-        return "flat"
-    if abs(roll) >= abs(pitch):
-        return "left_edge" if roll < 0 else "right_edge"
-    return "toe" if pitch > 0 else "heel"
+def joint_axis(joint) -> tuple[float, float, float]:
+    sn = joint.shortname()
+    return tuple(float(a) for a in joint.extract().axis) if sn == "JointModelRevoluteUnaligned" else JOINT_AXES[sn]
 
 
-def leaves_edge(mode: str, roll: float, pitch: float) -> bool:
-    """True once a foot rolling on an edge is level again (its tilt crossed zero)."""
-    return (
-        (mode == "toe" and pitch <= 0)
-        or (mode == "heel" and pitch >= 0)
-        or (mode == "left_edge" and roll >= 0)
-        or (mode == "right_edge" and roll <= 0)
-    )
+def symbolic_fk(m: pin.Model, joint_angle: Callable[[str], ca.SX | float], R_base, p_base) -> tuple[dict, dict]:
+    R, p = {1: R_base}, {1: p_base}
+    for j in range(2, m.njoints):
+        P, par = m.jointPlacements[j], m.parents[j]
+        axis = joint_axis(m.joints[j])
+        qj = joint_angle(m.names[j])
+        p[j] = p[par] + R[par] @ ca.DM(P.translation)
+        R[j] = R[par] @ ca.DM(P.rotation) @ rot_axis(axis, qj)
+    return R, p
+
+
+def wrap_angle(a: float) -> float:
+    return float((a + math.pi) % (2 * math.pi) - math.pi)
+
+
+def yaw_of(R: np.ndarray) -> float:
+    return math.atan2(R[1, 0], R[0, 0])
+
+
+def rotation_from_xyzw(quat) -> np.ndarray:
+    x, y, z, w = (float(c) for c in quat / np.linalg.norm(quat))
+    return pin.Quaternion(w, x, y, z).matrix()
 
 
 def compile_functions(functions: list[ca.Function], prefix: str, build: bool = False) -> dict[str, ca.Function]:
@@ -138,7 +150,6 @@ class RigidContactModel:
         act_names: list[str],
         q0_act: np.ndarray,
         alpha: float = 20.0,
-        compiled: bool = False,
         build: bool = False,
         yaw: bool = True,
         hip_yaw: bool = True,
@@ -164,16 +175,12 @@ class RigidContactModel:
         qn = pin.neutral(m)
         for n, v in zip(act_names, q0_act):
             qn[m.joints[m.getJointId(n)].idx_q] = v
-        for side in ("left", "right"):
-            for passive, (a, g) in PASSIVE_COUPLING.items():
-                qn[m.joints[m.getJointId(f"{side}_{passive}")].idx_q] = (
-                    g * qn[m.joints[m.getJointId(f"{side}_{a}")].idx_q]
-                )
+        for passive, (a, g) in PASSIVE_JOINTS.items():
+            qn[m.joints[m.getJointId(passive)].idx_q] = g * qn[m.joints[m.getJointId(a)].idx_q]
 
         jmap = {n: (nb + i, 1.0) for i, n in enumerate(joints)}
-        for side in ("left", "right"):
-            for passive, (a, g) in PASSIVE_COUPLING.items():
-                jmap[f"{side}_{passive}"] = (jmap[f"{side}_{a}"][0], g)
+        for passive, (a, g) in PASSIVE_JOINTS.items():
+            jmap[passive] = (jmap[a][0], g)
 
         q = ca.SX.sym("q", nq)
         qd = ca.SX.sym("qd", nq)
@@ -186,18 +193,12 @@ class RigidContactModel:
         Rb = rot_axis((0, 1, 0), q[4]) @ rot_axis((1, 0, 0), q[3])
         if yaw:
             Rb = rot_axis((0, 0, 1), q[5]) @ Rb
-        R, p = {1: Rb}, {1: q[:3]}
-        for j in range(2, m.njoints):
-            P, par, n = m.jointPlacements[j], m.parents[j], m.names[j]
-            sn = m.joints[j].shortname()
-            axis = (
-                tuple(float(a) for a in m.joints[j].extract().axis)
-                if sn == "JointModelRevoluteUnaligned"
-                else JOINT_AXES[sn]
-            )
-            qj = jmap[n][1] * q[jmap[n][0]] if n in jmap else float(qn[m.joints[j].idx_q])
-            p[j] = p[par] + R[par] @ ca.DM(P.translation)
-            R[j] = R[par] @ ca.DM(P.rotation) @ rot_axis(axis, qj)
+        R, p = symbolic_fk(
+            m,
+            lambda n: jmap[n][1] * q[jmap[n][0]] if n in jmap else float(qn[m.joints[m.getJointId(n)].idx_q]),
+            Rb,
+            q[:3],
+        )
 
         self.mass = sum(inertia.mass for inertia in m.inertias)
         com = sum(m.inertias[j].mass * (p[j] + R[j] @ ca.DM(m.inertias[j].lever)) for j in range(1, m.njoints))
@@ -278,9 +279,8 @@ class RigidContactModel:
         ]
 
         self.raw_sx = {f.name(): f for f in functions}
-        if compiled:
-            functions = [f for f in functions if f.name() != "qdd"]  # qdd is only used symbolically / offline
-            functions = list(compile_functions(functions, "robonion_model", build).values()) + [self.raw_sx["qdd"]]
+        functions = [f for f in functions if f.name() != "qdd"]  # qdd is only used symbolically / offline
+        functions = list(compile_functions(functions, "robonion_model", build).values()) + [self.raw_sx["qdd"]]
         for f in functions:
             setattr(self, f"f_{f.name()}", f)
 

@@ -19,8 +19,8 @@ import numpy as np
 import pinocchio as pin
 
 from MPC_Humanoid.mpc.controller import RobonionController
-from MPC_Humanoid.mpc.model import CONTROLLER_URDF, PASSIVE_COUPLING
-from MPC_Humanoid.robots.robonion_params import DEFAULT_JOINT_POS
+from MPC_Humanoid.mpc.model import CONTROLLER_URDF
+from MPC_Humanoid.robots.robonion_params import DEFAULT_JOINT_POS, PASSIVE_JOINTS
 
 
 def default_angle(joint: str) -> float:
@@ -35,7 +35,7 @@ def main() -> None:
     act_names = [
         m.names[j]
         for j in range(1, m.njoints)
-        if m.joints[j].shortname().startswith("JointModelR") and not m.names[j].endswith(tuple(PASSIVE_COUPLING))
+        if m.joints[j].shortname().startswith("JointModelR") and m.names[j] not in PASSIVE_JOINTS
     ]
     q_default_act = np.array([default_angle(n) for n in act_names])
     RobonionController(act_names, q_default_act, dt=0.005, build=True)

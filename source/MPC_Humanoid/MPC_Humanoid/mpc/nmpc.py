@@ -47,12 +47,16 @@ from .model import (
     BUILD_DIR,
     BUILD_HINT,
     GRAVITY,
+    MODEL_JOINTS,
     SOLE_HALF_LENGTH,
     SOLE_HALF_WIDTH,
     RigidContactModel,
     rot_axis,
 )
 
+N_BASE_JOINTS = len(MODEL_JOINTS)
+TORSO = MODEL_JOINTS.index("torso_pitch_joint")
+N_CONTACT_ROWS = 16
 # 16 nodes of 31.25 ms over the 0.5 s horizon behave like 25 nodes of 20 ms while stepping and cost ~40 % less per
 # tick; non-uniform grids (20 ms nodes first, longer ones after) raised the torso torque above the servo limit.
 N_NODES = 16
@@ -190,7 +194,7 @@ class RobonionNMPC:
         swing = ca.vertcat(*[(1 - contact[i]) * (soles[i] - sole_ref[3 * i : 3 * i + 3]) for i in (0, 1)])
         leg_err = ca.vertcat(*[contact[i] * (leg[i] - leg0[i]) for i in (0, 1)])
         track = ca.vertcat(dcm - dcm_ref, comd[:2] - comd_ref)
-        y = [track, q[nb + 8], u, v, squeeze, ca.vec(tilt), swing, leg_err, q[3:5]]
+        y = [track, q[nb + TORSO], u, v, squeeze, ca.vec(tilt), swing, leg_err, q[3:5]]
         y_e = [track, ca.vec(tilt), swing, leg_err, q[3:5]]
         w = [W_DCM] * 2 + [W_COMD] * 2 + [W_TORSO] + [W_U] * nl + [W_ARM] * na + [W_RATE] * ns + [W_SQUEEZE] * 2
         w += [W_TILT] * 4 + [W_SWING] * 6 + [W_LEG] * 2 + [W_PELVIS] * 2
@@ -238,7 +242,7 @@ class RobonionNMPC:
         f_alg = ca.Function("alg_all", args, [ca.densify(f_node(*args))])
 
         yref = np.zeros(am.cost_y_expr.shape[0])
-        yref[4] = self.u_nom[8]
+        yref[4] = self.u_nom[TORSO]
         yref[5 : 5 + nj] = self.u_nom
 
         ocp = AcadosOcp()
@@ -251,7 +255,7 @@ class RobonionNMPC:
         ocp.parameter_values = np.zeros(p.shape[0])
 
         lh, uh = np.zeros(self.nh), np.full(self.nh, 1e4)
-        lh[16:], uh[16:] = -effort, effort
+        lh[N_CONTACT_ROWS:], uh[N_CONTACT_ROWS:] = -effort, effort
         ocp.constraints.lh, ocp.constraints.uh = lh, uh
         ocp.constraints.idxsh = np.arange(self.nh)
         # slack penalties (L1, L2) per row group: forces [N], moments [N m], servo torque [N m]
@@ -260,7 +264,7 @@ class RobonionNMPC:
         ocp.cost.zl = ocp.cost.zu = z1
         ocp.cost.Zl = ocp.cost.Zu = z2
         ocp.constraints.x0 = np.r_[q_init, np.zeros(nq), self.u_nom[:ns]]
-        span = np.radians(np.r_[U_RANGE_DEG, [HIP_YAW_RANGE_DEG] * (nl - 9), ARM_RANGE_DEG[:na]])
+        span = np.radians(np.r_[U_RANGE_DEG, [HIP_YAW_RANGE_DEG] * (nl - N_BASE_JOINTS), ARM_RANGE_DEG[:na]])
         rate = M.rate_limit[:nl]
         self.u_lo, self.u_hi = self.u_nom - span, self.u_nom + span
         ocp.constraints.idxbx = 2 * nq + np.arange(ns)
@@ -349,7 +353,7 @@ class RobonionNMPC:
         ns = self.ns
         lbu, ubu = self.ocp.constraints.lbu.copy(), self.ocp.constraints.ubu.copy()
         if hip_yaw and self.m.hip_yaw:
-            lbu[9:ns] = ubu[9:ns] = 0.0
+            lbu[N_BASE_JOINTS:ns] = ubu[N_BASE_JOINTS:ns] = 0.0
         if arms and self.na:
             lbu[ns:] = ubu[ns:] = self.u_nom[ns:]
         for k in range(self.N):
@@ -404,12 +408,23 @@ class RobonionNMPC:
         )
         self.solver.set_flat("p", P.ravel())
 
-    def _feedback(self, q, qd, u_prev, dt, phase):
+    def prepare(self, q, qd, plan):
+        """RTI preparation for the next tick: linearisation with the next tick's plan around the current iterate. plan:
+        N + 1 dicts with keys modes, cref, dcm, comd, sole (3 x 2 sole-centre targets, used for feet in the air) and
+        optionally yaw (pelvis yaw, default 0)."""
+        self._set_params(q, qd, plan)
+        self.solver.options_set("rti_phase", 1)
+        self.solver.solve()
+
+    def feedback(self, q, qd, u_prev, dt):
+        """RTI feedback on a prepared linearisation: only the QP with the new initial state. Returns the servo targets
+        for the next tick, their rate for the ticks until the next NMPC run (0 for the arm targets), the QP status and
+        the solver time [s]."""
         ns = self.ns
         x0 = np.r_[q, qd, u_prev[:ns]]
         self.solver.set(0, "lbx", x0)
         self.solver.set(0, "ubx", x0)
-        self.solver.options_set("rti_phase", phase)
+        self.solver.options_set("rti_phase", 2)
         status = self.solver.solve()
         self.X = self.solver.get_flat("x").reshape(self.N + 1, self.nx)
         c = self.solver.get(0, "u")
@@ -422,21 +437,3 @@ class RobonionNMPC:
             self.reset(x0)
             return u_prev, v * 0.0, status, time_tot
         return np.r_[u_prev[:ns] + c[:ns] * dt, c[ns:]], v, status, time_tot
-
-    def solve(self, q, qd, u_prev, plan, dt):
-        """One full SQP-RTI iteration from (q, qd) and the current servo targets u_prev. plan: N + 1 dicts with
-        keys modes, cref, dcm, comd, sole (3 x 2 sole-centre targets, used for feet in the air) and optionally yaw
-        (pelvis yaw, default 0). Returns the servo targets for the next tick, their rate for the ticks until the
-        next NMPC run (0 for the arm targets), the QP status and the solver time [s]."""
-        self._set_params(q, qd, plan)
-        return self._feedback(q, qd, u_prev, dt, 0)
-
-    def prepare(self, q, qd, plan):
-        """RTI preparation for the next tick: linearisation with the next tick's plan around the current iterate."""
-        self._set_params(q, qd, plan)
-        self.solver.options_set("rti_phase", 1)
-        self.solver.solve()
-
-    def feedback(self, q, qd, u_prev, dt):
-        """RTI feedback on a prepared linearisation: only the QP with the new initial state."""
-        return self._feedback(q, qd, u_prev, dt, 2)

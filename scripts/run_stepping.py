@@ -48,11 +48,12 @@ args = parser.parse_args()
 app_launcher = AppLauncher(args)
 simulation_app = app_launcher.app
 
+import dataclasses
+import json
 import math
 import time
 
 import numpy as np
-import pinocchio as pin
 import torch
 
 from isaaclab.envs import ManagerBasedEnv
@@ -61,7 +62,7 @@ from MPC_Humanoid.env import MpcHumanoidRobonionEnvCfg
 from MPC_Humanoid.mpc.controller import RobonionController
 from MPC_Humanoid.mpc.ekf import roll_pitch
 from MPC_Humanoid.mpc.gait import GaitParams
-from MPC_Humanoid.mpc.model import SOLE_CORNERS
+from MPC_Humanoid.mpc.model import SOLE_CORNERS, rotation_from_xyzw
 
 H_AIR = 0.001  # m, lowest sole corner above its standing height: the foot is in the air (scoring only)
 PUSH_SS = 4  # index of the single support the push is timed on (the 5th)
@@ -72,8 +73,7 @@ TIMEOUT = 8.0  # s past the nominal gait duration, in case retiming and pauses k
 def sole_lows(pose: np.ndarray, feet: list[int]) -> np.ndarray:
     lows = []
     for b in feet:
-        x, y, z, w = (float(v) for v in pose[b, 3:])
-        R = pin.Quaternion(w, x, y, z).matrix()
+        R = rotation_from_xyzw(pose[b, 3:])
         lows.append((pose[b, :3][:, None] + R @ SOLE_CORNERS.T)[2].min())
     return np.array(lows)
 
@@ -83,7 +83,6 @@ def trace_row(controller: RobonionController, inputs: tuple, root_pose: np.ndarr
     ([lin, ang], world) it was measured at. The truth is for scoring only, it never reaches the controller."""
     c, st = controller, controller.status
     roll, pitch, _, _, _ = c.ahrs(*inputs[:4])
-    x, y, z, w = (float(v) for v in root_pose[3:])
     flags, pc = c._cfg
     base_pos, base_vel, base_R = c._ekf_base
     return {
@@ -103,14 +102,17 @@ def trace_row(controller: RobonionController, inputs: tuple, root_pose: np.ndarr
         "ekf_base_R": np.array(base_R),
         "tilt_ahrs": np.array([roll, pitch]) - c._bias,
         "tilt_ekf": roll_pitch(base_R),
-        "tilt_truth": roll_pitch(pin.Quaternion(w, x, y, z).matrix()),
+        "tilt_truth": roll_pitch(rotation_from_xyzw(root_pose[3:])),
         "crow_err": flags * (np.array(c.model.f_crow(st.q, pc)).ravel() - c._cref),
         "jc_qd": float(np.linalg.norm(flags * (np.array(c.model.f_Jc(st.q, pc)) @ st.qd))),
     }
 
 
-def main() -> None:
-    cfg = MpcHumanoidRobonionEnvCfg()
+def main(
+    env_cfg_cls: type[MpcHumanoidRobonionEnvCfg] = MpcHumanoidRobonionEnvCfg,
+    controller_cls: type[RobonionController] = RobonionController,
+) -> None:
+    cfg = env_cfg_cls()
     cfg.scene.num_envs = 1
     cfg.seed = args.seed
     cfg.sim.device = args.device
@@ -140,7 +142,7 @@ def main() -> None:
         first_swing=0 if args.vy > 0 else 1,
         ramp_steps=args.ramp_steps,
     )
-    controller = RobonionController(
+    controller = controller_cls(
         act_names, q_default_act, env.step_dt, params, arms=not args.no_arms, hip_yaw=not args.no_hip_yaw
     )
 
@@ -272,7 +274,7 @@ def main() -> None:
             act_names=np.array(act_names),
             q_default_act=q_default_act,
             step_dt=env.step_dt,
-            params=np.array([params.t_ss, params.t_ds, params.clearance, params.n_steps]),
+            gait=json.dumps(dataclasses.asdict(params)),
             locked=np.array([args.no_arms, args.no_hip_yaw]),
             **{k: np.array(v) for k, v in record.items()},
         )

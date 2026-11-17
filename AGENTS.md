@@ -45,8 +45,6 @@ plan only as background on decisions already made.
 ## Commands
 
 ```bash
-uv run isaaclab zero_agent --task <TASK_NAME>              # sanity-check an env
-uv run isaaclab train --rl_library <LIB> --task <TASK_NAME>
 uv run pre-commit run --all-files                           # lint/format (ruff, codespell, etc.)
 uv run python scripts/run_env.py --viz kit                  # load the Robonion env (headless without --viz)
 uv run python scripts/build_controller.py                   # build the controller (C functions + acados solver), no Isaac

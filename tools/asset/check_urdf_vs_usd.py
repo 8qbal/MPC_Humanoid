@@ -46,9 +46,9 @@ def rpy2R(rpy):
 
 root = ET.parse(args.urdf).getroot()
 links, joints = {}, {}
-for l in root.findall("link"):
-    d = {"name": l.get("name"), "visual": [], "collision": [], "inertial": None}
-    for vis in l.findall("visual"):
+for link in root.findall("link"):
+    d = {"name": link.get("name"), "visual": [], "collision": [], "inertial": None}
+    for vis in link.findall("visual"):
         o, g = vis.find("origin"), vis.find("geometry")
         mesh = g.find("mesh")
         d["visual"].append(
@@ -58,7 +58,7 @@ for l in root.findall("link"):
                 "mesh": mesh.get("filename").split("/")[-1] if mesh is not None else None,
             }
         )
-    for col in l.findall("collision"):
+    for col in link.findall("collision"):
         o, g = col.find("origin"), col.find("geometry")[0]
         d["collision"].append(
             {
@@ -68,18 +68,18 @@ for l in root.findall("link"):
                 "attr": dict(g.attrib),
             }
         )
-    ine = l.find("inertial")
-    if ine is not None:
-        o, I = ine.find("origin"), ine.find("inertia").attrib
+    inertial = link.find("inertial")
+    if inertial is not None:
+        o, inertia = inertial.find("origin"), inertial.find("inertia").attrib
         d["inertial"] = {
-            "mass": float(ine.find("mass").get("value")),
+            "mass": float(inertial.find("mass").get("value")),
             "xyz": v3(o.get("xyz")) if o is not None else np.zeros(3),
             "rpy": v3(o.get("rpy")) if o is not None else np.zeros(3),
             "I": np.array(
                 [
-                    [float(I["ixx"]), float(I["ixy"]), float(I["ixz"])],
-                    [float(I["ixy"]), float(I["iyy"]), float(I["iyz"])],
-                    [float(I["ixz"]), float(I["iyz"]), float(I["izz"])],
+                    [float(inertia["ixx"]), float(inertia["ixy"]), float(inertia["ixz"])],
+                    [float(inertia["ixy"]), float(inertia["iyy"]), float(inertia["iyz"])],
+                    [float(inertia["ixz"]), float(inertia["iyz"]), float(inertia["izz"])],
                 ]
             ),
         }
@@ -227,7 +227,8 @@ for name, L in links.items():
             rel, rel_inv = np.abs(I_usd - I_urdf).max() / scale, np.abs(I_inv - I_urdf).max() / scale
             eig = np.sort(np.linalg.eigvalsh(I_urdf))
             print(
-                f"   inertia: urdf eig={eig.round(8)} usd diag={np.sort(np.array(di)).round(8)} tensor rel diff={rel:.2%} {'OK' if rel < 0.01 else 'MISMATCH'}"
+                f"   inertia: urdf eig={eig.round(8)} usd diag={np.sort(np.array(di)).round(8)} "
+                f"tensor rel diff={rel:.2%} {'OK' if rel < 0.01 else 'MISMATCH'}"
             )
             if rel >= 0.01 and rel_inv < 0.01:
                 issue("ERR", f"{name}: principalAxes is INVERTED (converter <=0.1.3 bug)")
@@ -283,7 +284,8 @@ for name, L in links.items():
             and len(stl) == len(tri)
         )
         print(
-            f"   visual {v['mesh']:34s} origin dt={dt:.1e} | tris {len(stl)}/{len(tri)} | bbox d={bb:.1e} | area d={(a_s - a_u) / a_s:.1e} | centroid d={np.abs(c_s - c_u).max():.1e} {'OK' if ok else 'MISMATCH'}"
+            f"   visual {v['mesh']:34s} origin dt={dt:.1e} | tris {len(stl)}/{len(tri)} | bbox d={bb:.1e} | "
+            f"area d={(a_s - a_u) / a_s:.1e} | centroid d={np.abs(c_s - c_u).max():.1e} {'OK' if ok else 'MISMATCH'}"
         )
         if not ok:
             issue("ERR", f"{name}: visual mesh {v['mesh']} differs from USD")
@@ -320,13 +322,15 @@ for name, L in links.items():
         elif uc["type"] == "mesh":
             hit = [c for c in cols if c.IsA(UsdGeom.Mesh)]
             print(
-                f"   collision mesh approximation={A(hit[0], 'physics:approximation') if hit else None} {'OK' if hit else 'MISMATCH'}"
+                f"   collision mesh approximation={A(hit[0], 'physics:approximation') if hit else None} "
+                f"{'OK' if hit else 'MISMATCH'}"
             )
             if not hit:
                 issue("ERR", f"{name}: mesh collision not found")
 
 print(
-    f"\nTOTAL mass urdf={sum(l['inertial']['mass'] for l in links.values() if l['inertial']):.6f}  usd={usd_mass:.6f}"
+    f"\nTOTAL mass urdf={sum(link['inertial']['mass'] for link in links.values() if link['inertial']):.6f}  "
+    f"usd={usd_mass:.6f}"
 )
 
 # Joint validation.
@@ -395,7 +399,8 @@ for name, J in joints.items():
             damp, damp_src = math.degrees(A(p, "newton:damping")), "newton:damping (deg->rad)"
         vel_u = math.degrees(J["velocity"])
         print(
-            f"   effort={effort} [{effort_src}] (urdf {J['effort']}) | velocity={vel} [{vel_src}] (urdf {vel_u:.2f} deg/s) | damping={damp} [{damp_src}] (urdf {J['damping']})"
+            f"   effort={effort} [{effort_src}] (urdf {J['effort']}) | velocity={vel} [{vel_src}] "
+            f"(urdf {vel_u:.2f} deg/s) | damping={damp} [{damp_src}] (urdf {J['damping']})"
         )
         if effort is None:
             issue("WARN", f"{name}: no effort limit authored (urdf {J['effort']})")
@@ -420,7 +425,8 @@ for n, p in usd_joints.items():
     a1 = W1[:3, :3] @ np.array(A(p, "physics:localPos1")) + W1[:3, 3]
     gap = np.linalg.norm(a0 - a1)
     print(
-        f"{n}: {b0.GetName()} <-> {b1.GetName()} excludeFromArticulation={A(p, 'physics:excludeFromArticulation')} anchor gap={gap * 1000:.3f} mm {'OK' if gap < 1e-4 else 'MISMATCH'}"
+        f"{n}: {b0.GetName()} <-> {b1.GetName()} excludeFromArticulation={A(p, 'physics:excludeFromArticulation')} "
+        f"anchor gap={gap * 1000:.3f} mm {'OK' if gap < 1e-4 else 'MISMATCH'}"
     )
     if gap >= 1e-4:
         issue("ERR", f"{n}: loop anchors do not coincide at zero pose")
@@ -429,7 +435,8 @@ print("\n================ ARTICULATION ================")
 for p in stage.Traverse():
     if p.HasAPI(UsdPhysics.ArticulationRootAPI):
         print(
-            f"root: {p.GetPath()}  schemas={p.GetAppliedSchemas()}  selfCollisions={A(p, 'physxArticulation:enabledSelfCollisions')}"
+            f"root: {p.GetPath()}  schemas={p.GetAppliedSchemas()}  "
+            f"selfCollisions={A(p, 'physxArticulation:enabledSelfCollisions')}"
         )
 print("physics scenes:", [str(p.GetPath()) for p in stage.Traverse() if p.IsA(UsdPhysics.Scene)])
 

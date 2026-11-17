@@ -46,4 +46,4 @@ print(f"wrote {args.dst} ({os.path.getsize(args.dst) / 1e6:.1f} MB)")
 
 check = Usd.Stage.Open(args.dst)
 print("root prims :", [p.GetName() for p in check.GetPseudoRoot().GetChildren()])
-print("layers used:", [os.path.relpath(l.realPath) for l in check.GetUsedLayers() if l.realPath])
+print("layers used:", [os.path.relpath(layer.realPath) for layer in check.GetUsedLayers() if layer.realPath])

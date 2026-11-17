@@ -45,13 +45,6 @@ plan only as background on decisions already made.
 ## Commands
 
 ```bash
-uv run isaaclab zero_agent --task <TASK_NAME> --num_envs 16   # sanity-check an env, no policy
-uv run isaaclab random_agent --task <TASK_NAME> --num_envs 16
-uv run isaaclab train --rl_library <RL_LIBRARY> --task <TASK_NAME>
-uv run isaaclab play --rl_library <RL_LIBRARY> --task <TASK_NAME> --checkpoint latest
-uv run isaaclab train_multigpu --rl_library <RL_LIBRARY> --task <TASK_NAME> --num_gpus 2
-uv run isaaclab benchmark runtime --task <TASK_NAME> --num_envs 16 --num_steps 1000
-uv run isaaclab benchmark training --rl_library <RL_LIBRARY> --task <TASK_NAME> --max_iterations 10
 uv run pre-commit run --all-files                              # lint/format (ruff, codespell, etc.)
 uv run python scripts/run_env.py --viz kit                    # load the Robonion MPC env and play it (headless without --viz)
 uv run python scripts/build_controller.py                     # build the controller (C functions + acados solver), no Isaac
@@ -59,9 +52,6 @@ uv run python scripts/run_stepping.py --steps 20                # stage-2 steppi
 uv run python scripts/run_stepping.py --push x+1.75            # one push mid single support while stepping
 uv run python scripts/run_stepping_nocalib.py --viz kit        # spawned crouched, no AHRS calibration (holds: bias > 0.2 deg)
 ```
-
-`physics=<PRESET>` selects one of the physics presets defined per task (e.g. the
-`MpcHumanoidPhysicsCfg` presets such as `newton_mjwarp` / `newton_kamino` / `physx`).
 
 Linting: `ruff` (line length 120, `E,F,I,UP,W`) + `ruff-format` + `codespell`, run
 via pre-commit. Match existing code style (docstrings, type hints, `from __future__

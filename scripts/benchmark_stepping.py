@@ -14,14 +14,19 @@ target machine first (a few minutes on the Jetson).
 Usage:
     uv run python scripts/benchmark_stepping.py run.npz
     uv run python scripts/benchmark_stepping.py run.npz --repeat 3
+    uv run python scripts/benchmark_stepping.py run.npz --golden golden.npz
 """
 
 import argparse
+import dataclasses
+import os
+import sys
 import time
+from collections import Counter
 
 import numpy as np
 
-from MPC_Humanoid.mpc.controller import RobonionController
+from MPC_Humanoid.mpc.controller import RobonionController, State
 from MPC_Humanoid.mpc.gait import GaitParams
 
 
@@ -29,11 +34,16 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("record", help=".npz written by scripts/run_stepping.py --record")
     parser.add_argument("--repeat", type=int, default=1, help="replays of the whole run, all timed")
+    parser.add_argument("--golden", help="targets of the first replay: saved here if missing, else compared")
+    parser.add_argument("--tol", type=float, default=0.0, help="largest accepted |q_des - golden| [rad]")
+    parser.add_argument("--vx", type=float, default=None, help="GaitParams.vx for recordings that do not store it")
     args = parser.parse_args()
 
     d = np.load(args.record)
     t_ss, t_ds, clearance, n_steps = d["params"]
     params = GaitParams(t_ss=float(t_ss), t_ds=float(t_ds), clearance=float(clearance), n_steps=int(n_steps))
+    if args.vx is not None:
+        params = dataclasses.replace(params, vx=args.vx)
     inputs = [d[k].astype(np.float32) for k in ("q_act", "qd_act", "quat", "gyro", "accel")]
     no_arms, no_hip_yaw = (bool(x) for x in d["locked"]) if "locked" in d else (False, False)
     controller = RobonionController(
@@ -45,7 +55,7 @@ def main() -> None:
         hip_yaw=not no_hip_yaw,
     )
 
-    ticks, solves, diff = [], [], 0.0
+    ticks, solves, diff, q_first, states = [], [], 0.0, [], Counter()
     for rep in range(args.repeat):
         controller.reset()
         for k in range(len(inputs[0])):
@@ -59,6 +69,9 @@ def main() -> None:
                     solves.append(st.solve_time)
             if rep == 0:  # later replays start from the solver's warm-start memory of the previous one
                 diff = max(diff, float(np.abs(q_des - d["q_des"][k]).max()))
+                q_first.append(q_des.copy())
+                if st.plan_time is not None:
+                    states[st.state] += 1
 
     tk, sv = 1e3 * np.array(ticks), 1e3 * np.array(solves)
     print(f"{args.record}: {len(tk)} controller ticks ({args.repeat} replay(s)), budget {1e3 * d['step_dt']:.1f} ms")
@@ -69,6 +82,19 @@ def main() -> None:
     )
     print(f"  acados solve time per tick mean {sv.mean():.2f}, p95 {np.percentile(sv, 95):.2f} ms")
     print(f"  max |servo target - recorded| {diff:.2e} rad")
+    print("  ticks per state: " + ", ".join(f"{s.name} {states[s]}" for s in State))
+
+    if args.golden:
+        q_first = np.array(q_first)
+        if not os.path.exists(args.golden):
+            np.savez(args.golden, q_des=q_first)
+            print(f"  golden saved to {args.golden}")
+        else:
+            golden = np.load(args.golden)["q_des"]
+            err = float(np.abs(q_first - golden).max()) if q_first.shape == golden.shape else float("inf")
+            print(f"  max |q_des - golden| {err:.2e} rad")
+            if err > args.tol:
+                sys.exit(1)
 
 
 if __name__ == "__main__":

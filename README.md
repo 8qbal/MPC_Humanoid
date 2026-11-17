@@ -12,28 +12,16 @@ uv sync
 
 Commit both `pyproject.toml` files and `uv.lock` so collaborators use the same environment.
 
-## Run the generated tasks
-
-Replace the placeholders below with a generated task and selected RL library.
+## Commands
 
 ```bash
-# Exercise an environment without a trained policy
-uv run isaaclab zero_agent --task <TASK_NAME> --num_envs 16
-uv run isaaclab random_agent --task <TASK_NAME> --num_envs 16
-
-# Train and play
-uv run isaaclab train --rl_library <RL_LIBRARY> --task <TASK_NAME>
-uv run isaaclab play --rl_library <RL_LIBRARY> --task <TASK_NAME> --checkpoint latest
-
-# Distributed training
-uv run isaaclab train_multigpu --rl_library <RL_LIBRARY> --task <TASK_NAME> --num_gpus 2
-
-# Benchmark startup, runtime, training, or play
-uv run isaaclab benchmark runtime --task <TASK_NAME> --num_envs 16 --num_steps 1000
-uv run isaaclab benchmark training --rl_library <RL_LIBRARY> --task <TASK_NAME> --max_iterations 10
+uv run python scripts/run_env.py --viz kit                    # load the Robonion MPC env and play it (headless without --viz)
+uv run python scripts/build_controller.py                     # build the controller (C functions + acados solver), no Isaac
+uv run python scripts/run_stepping.py --steps 20                # stage-2 stepping in place (crouch, calibrate, step)
+uv run python scripts/run_stepping.py --push x+1.75            # one push mid single support while stepping
+uv run python scripts/run_stepping_nocalib.py --viz kit        # spawned crouched, no AHRS calibration (holds: bias > 0.2 deg)
+uv run python scripts/benchmark_stepping.py run.npz            # replay a run recorded with run_stepping.py --record, no Isaac
 ```
-
-Use `physics=<PRESET>` to select one of the physics presets defined per task.
 
 ## Development
 
@@ -48,11 +36,6 @@ To configure VS Code, run the `setup_python_env` task or invoke its command dire
 ```bash
 uv run python .vscode/tools/setup_vscode.py
 ```
-
-## Isaac Sim extension
-
-Add the project's `source` directory to the Isaac Sim Extension Manager search paths, refresh, and enable the extension
-under `Third Party`. The optional UI example is in `source/MPC_Humanoid/MPC_Humanoid/ui_extension_example.py`.
 
 ## Troubleshooting
 

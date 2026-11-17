@@ -75,20 +75,20 @@ for name, body in bodies.items():
     link = ET.SubElement(robot, "link", name=name)
     mass = attr(body, "physics:mass")
     com = np.array(attr(body, "physics:centerOfMass"))
-    I = quat_to_R(attr(body, "physics:principalAxes")) @ np.diag(attr(body, "physics:diagonalInertia"))
-    I = I @ quat_to_R(attr(body, "physics:principalAxes")).T
+    inertia = quat_to_R(attr(body, "physics:principalAxes")) @ np.diag(attr(body, "physics:diagonalInertia"))
+    inertia = inertia @ quat_to_R(attr(body, "physics:principalAxes")).T
     inertial = ET.SubElement(link, "inertial")
     ET.SubElement(inertial, "origin", xyz=fmt(com), rpy="0 0 0")
     ET.SubElement(inertial, "mass", value=f"{mass:.9g}")
     ET.SubElement(
         inertial,
         "inertia",
-        ixx=f"{I[0, 0]:.9g}",
-        ixy=f"{I[0, 1]:.9g}",
-        ixz=f"{I[0, 2]:.9g}",
-        iyy=f"{I[1, 1]:.9g}",
-        iyz=f"{I[1, 2]:.9g}",
-        izz=f"{I[2, 2]:.9g}",
+        ixx=f"{inertia[0, 0]:.9g}",
+        ixy=f"{inertia[0, 1]:.9g}",
+        ixz=f"{inertia[0, 2]:.9g}",
+        iyy=f"{inertia[1, 1]:.9g}",
+        iyz=f"{inertia[1, 2]:.9g}",
+        izz=f"{inertia[2, 2]:.9g}",
     )
 
 for j in tree_joints:

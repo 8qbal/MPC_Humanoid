@@ -127,9 +127,7 @@ class LegKinematicsEkf:
                 qj = gain * q_act[act_names.index(f"{side}_{active}")]
             sn = joint.shortname()
             axis = (
-                tuple(float(a) for a in joint.extract().axis)
-                if sn == "JointModelRevoluteUnaligned"
-                else JOINT_AXES[sn]
+                tuple(float(a) for a in joint.extract().axis) if sn == "JointModelRevoluteUnaligned" else JOINT_AXES[sn]
             )
             P, par = m.jointPlacements[j], m.parents[j]
             p[j] = p[par] + R[par] @ ca.DM(P.translation)

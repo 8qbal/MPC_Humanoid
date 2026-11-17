@@ -62,17 +62,9 @@ LOOP_JOINTS = {
 
 
 def fix_loop_joints(stage):
-    # The closure is spherical, not revolute. The three tree joints
-    # of each parallelogram stage are already parallel revolutes, so the closure
-    # only has to pin one point: a spherical joint adds the 3 positional
-    # constraints that does, whereas a revolute would add 5 and leave the planar
-    # 4-bar over-constrained by 3 (Gruebler in 3D: 6*3 - 4*5 = -2). PhysX can
-    # tolerate that redundancy on some builds but not others: with omni.physx
-    # 110.1.x (Isaac Sim 6.0.1, the GUI install) a revolute closure makes the
-    # whole articulation explode to ~1e14 m on first ground contact, while the
-    # spherical closure is stable on both 110.1.x and 110.3.x (see
-    # a standalone drop test, since removed). NVIDIA's own loop-closure examples use spherical
-    # or D6 joints for the same reason.
+    # Spherical, not revolute: the stage's tree joints are parallel revolutes, so the closure only pins one point; a
+    # revolute closure over-constrains the 4-bar and explodes on omni.physx 110.1.x (Isaac Sim 6.0.1, the GUI install).
+    # NVIDIA's own loop-closure examples use spherical or D6 joints. Details: references/docs/joint_info.md.
     for name, (body0_rel, body1_rel) in LOOP_JOINTS.items():
         body0, body1 = f"{PELVIS}/{body0_rel}", f"{PELVIS}/{body1_rel}"
         for b in (body0, body1):
@@ -104,25 +96,16 @@ def fix_self_collision(stage):
     pelvis = stage.GetPrimAtPath(PELVIS)
     assert pelvis.HasAPI(UsdPhysics.ArticulationRootAPI), "converter did not mark the pelvis as articulation root"
     pelvis.AddAppliedSchema("PhysxArticulationAPI")
-    # PhysX reads the physxArticulation attribute; the Newton schema the
-    # converter applies has its own. Author both so every backend agrees.
-    # These are authored as plain custom attributes (not through the real
-    # PhysxSchema.PhysxArticulationAPI class) because that class only exists
-    # inside the Kit/Isaac Sim runtime, not in this project's standalone pxr
-    # package -- so there is no way from here to confirm PhysX actually reads
-    # them, or that they cover bodies linked in only via a loop-closure joint
-    # (excludeFromArticulation) rather than the reduced-coordinate tree.
+    # PhysX reads physxArticulation:*, the converter's Newton schema its own: author both. Plain attributes, since
+    # PhysxSchema.PhysxArticulationAPI exists only in the Kit runtime, not in this venv's pxr; so it is unverified here
+    # whether PhysX reads them, or covers bodies linked only by a loop-closure joint (excludeFromArticulation).
     pelvis.CreateAttribute("physxArticulation:enabledSelfCollisions", Sdf.ValueTypeNames.Bool).Set(False)
     pelvis.CreateAttribute("newton:selfCollisionEnabled", Sdf.ValueTypeNames.Bool).Set(False)
     print("[2] lower_body_link: PhysxArticulationAPI, self-collision off")
 
-    # Also disable self-collision through UsdPhysics.CollisionGroup.
-    # a vanilla (non-PhysX-specific) schema that any physics backend must honor and that
-    # this script can construct and verify without the Kit runtime. A group that lists
-    # itself in filteredGroups (invertFilteredGroups=False, the default) does not collide
-    # with its own members -- the standard USD idiom for "self-collision off". Every prim
-    # with UsdPhysics.CollisionAPI is added, including bodies only reachable via a
-    # loop-closure joint, which the two attribute-only fixes above cannot guarantee cover.
+    # Self-collision also off through UsdPhysics.CollisionGroup, a backend-neutral schema this script can verify
+    # without Kit: a group listing itself in filteredGroups does not collide with its own members. Every CollisionAPI
+    # prim is added, including bodies reachable only via a loop closure, which the attributes above may not cover.
     group = UsdPhysics.CollisionGroup.Define(stage, f"{PHYSICS_SCOPE}/RobinionSelfCollisionGroup")
     group.CreateInvertFilteredGroupsAttr(False)
     group.CreateFilteredGroupsRel().SetTargets([group.GetPath()])

@@ -155,7 +155,7 @@ class RigidContactModel:
         hip_yaw: bool = True,
         arms: bool = True,
     ):
-        """compiled: the f_* are generated C (one shared library) instead of the CasADi VM; symbolic users
+        """The f_* are generated C (one shared library) instead of the CasADi VM; symbolic users
         (the NMPC) take the CasADi functions from raw_sx. build: see compile_functions. yaw, hip_yaw, arms: pelvis
         yaw (with a yaw row per sole), the hip yaw joints and the 8 arm joints as model coordinates."""
         self.yaw, self.hip_yaw, self.arms = yaw, hip_yaw, arms

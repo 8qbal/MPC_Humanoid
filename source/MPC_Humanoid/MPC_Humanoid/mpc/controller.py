@@ -42,36 +42,40 @@ from .gait import XY_DONE, GaitParams, GaitPlan, swing_xy
 from .model import EDGE_MODES, GRAVITY, RigidContactModel, wrap_angle, yaw_of
 from .nmpc import RobonionNMPC
 
+# Why each value and rule: docs/stage3.md, "Controller constants and gait rules".
+
+# Startup timeline [s]; the AHRS bias is averaged from CALIBRATION_START to GAIT_START with both soles flat.
 CROUCH = 0.2  # rad on front thigh and ankle pitch (negative, the LEG_CROUCH convention of robots/robonion_params.py)
-CROUCH_START, CROUCH_TIME = 0.5, 0.8  # s
-CALIBRATION_START, GAIT_START = 1.5, 2.0  # s; AHRS bias averaged in between, both soles flat
-# Edge detection by predicted tilt (ContactModeMonitor lead): 15 ms ahead, as early as the stage-1 rate trigger
-# (docs/stage1.md), which flags soles levelling out after a weight shift and touchdown rocking while stepping.
-MONITOR_LEAD = 0.015  # s
-# The predicted tilt must flag the same edge on 3 consecutive ticks: with 1, a one-tick touchdown impact (12-14 deg/s
-# at zero tilt) held the targets 0.4-0.8 s over 20 steps at 3 cm; with 2 and the 0.038 armature, the 0.1-0.15 deg
-# sole wobble after touchdown held them for seconds (2026-10-15).
-MONITOR_TICKS = 3
-# A foot released by force while it still stood (lift-off) and taken back the next tick predicted -15 N on the other
-# foot with the targets of the solve before, which released that one (fell walking at 0.1 m/s, 2026-10-17)
-MONITOR_SETTLE = 3
+CROUCH_START = 0.5
+CROUCH_TIME = 0.8
+CALIBRATION_START = 1.5
+GAIT_START = 2.0
+
+# Contact-mode monitor
+MONITOR_LEAD = 0.015  # s: an edge is flagged when tilt + lead * rate passes the tilt threshold
+MONITOR_TICKS = 3  # same edge on consecutive ticks, so touchdown impacts and wobble are not edges
+MONITOR_SETTLE = 3  # ticks after a touchdown in which the other foot is not released by force
+
+# Gait plan
 COM_RAMP = 1.0  # s, DCM target from the CoM at the start to the middle of the soles
-MAX_STRETCH = 0.15  # s a single-support phase may run beyond its planned end waiting for touchdown
-# A sole resting on an edge: its tilt angle stays within STILL_SPAN for STILL_TIME; the targets then move to the
-# standing posture at RESET_RATE [rad/s]. Resuming the NMPC with the tilted sole planned flat instead rolled it
-# again within ~50 ms.
-STILL_SPAN, STILL_TIME, RESET_RATE = math.radians(0.3), 0.2, 0.5
-# Holding with both feet down keeps RECOVER_TIME of double support ahead, from PAUSE_AFTER into the hold (a foot
-# about to lift often tips onto an edge for a few ticks, pausing then keeps it waiting there) up to MAX_PAUSE.
-RECOVER_TIME, PAUSE_AFTER, MAX_PAUSE = 0.6, 0.1, 3.0
-# After a hold the NMPC stands until the DCM is within CALM_DCM of the middle of the soles and the CoM speed
-# below CALM_SPEED for CALM_TIME.
-CALM_DCM, CALM_SPEED, CALM_TIME = 0.01, 0.03, 0.2
-# NMPC at 100 Hz under the 200 Hz estimation and gait logic, so the edge and touchdown tuning stays at 5 ms
-# (docs/stage3.md, decision of 2026-10-07)
-NMPC_EVERY = 2
-CATCH_UNTIL = XY_DONE  # swing progress; later the swing foot comes down vertically (gait.XY_DONE)
-RESTART_DS = 0.6  # s, first double support after a hold while walking
+MAX_STRETCH = 0.15  # s a single support may run beyond its planned end waiting for touchdown
+CATCH_UNTIL = XY_DONE  # swing progress; later the swing foot comes down vertically
+
+# Holding on an edge
+STILL_SPAN = math.radians(0.3)  # a sole whose tilt stays within this for STILL_TIME rests on its edge (RESET)
+STILL_TIME = 0.2  # s
+RESET_RATE = 0.5  # rad/s, targets towards the standing posture while resting
+RECOVER_TIME = 0.6  # s of double support kept ahead while holding with both feet down
+PAUSE_AFTER = 0.1  # s into a hold before the plan pauses
+MAX_PAUSE = 3.0  # s
+CALM_DCM = 0.01  # m, RECOVER ends when the DCM is within this of the middle of the soles
+CALM_SPEED = 0.03  # m/s, and the CoM is slower than this
+CALM_TIME = 0.2  # s, for this long
+
+NMPC_EVERY = 2  # ticks: NMPC at 100 Hz, estimation and gait logic at 200 Hz
+
+# Walking, restart after a hold
+RESTART_DS = 0.6  # s, first double support of the new plan
 RESTART_STAGGER = 0.01  # m between the soles along x from which the leading foot steps back first
 
 
@@ -161,6 +165,7 @@ class RobonionController:
         self.monitor.reset()
         self.estimator.reset()
         self.ekf.reset()
+        self._footholds.reset()
         self._ekf_frame = None  # (rotation, offset) from the EKF world to the model world
         self._yaw0 = 0.0  # EKF yaw of the model world
         self._ekf_base = None
@@ -170,18 +175,20 @@ class RobonionController:
         self._bias = self._cref = None
         self._cfg = self.model.contact_config("flat", "flat")
 
-        self._ctrl_modes = ["flat", "flat"]
-        self._lift_xy = self._u_lift = None
         self._home = self._mid = self._com0 = None
         self._walking = False
-        self._lift_step = [None, None]
+
+        self._ctrl_modes = ["flat", "flat"]
         self._soles = None
-        self._footholds.reset()
+        self._lift_xy = self._u_lift = None
+        self._lift_step = [None, None]
         self._airborne: set[int] = set()
+
         self.state = State.STEP
         self._hold_since = None
         self._calm = 0.0
         self._tilt_hist = []
+
         self._prepared = None
         self._since_nmpc = 0  # ticks since the NMPC last ran
         self._deferred = False  # the last NMPC tick only prepared after a contact change
@@ -251,9 +258,8 @@ class RobonionController:
         return self.q_des
 
     def _estimate(self, meas):
-        # contact points of the feet in contact where the EKF has them and sole yaw as the EKF base yaw and the leg
-        # kinematics give it (they may slip), so the joints and tilt projected onto the contact manifold agree with
-        # the EKF base
+        """Model state. The contact references of the feet in contact follow the EKF (contact points, and sole yaw from
+        the EKF base yaw and the leg kinematics; the feet may slip), so the projection agrees with the EKF base."""
         Rz, offset = self._ekf_frame
         flags, pc = self._cfg
         joints, roll, pitch, _, _, _, yaw, _ = meas
@@ -307,10 +313,8 @@ class RobonionController:
         self.plan = GaitPlan(self.params, feet_xy, com[2])
         self.nmpc.reset(np.r_[q_stand, np.zeros(self.model.nq), self.u[: self.nmpc.ns]])
 
-    # gait logic -------------------------------------------------------------------------------------------------
-
     def _gait(self, t, q, qd, modes):
-        """Servo targets (or (targets, QP status, solve time) when the NMPC ran) for plan time t."""
+        """Servo targets, QP status and solve time for plan time t (status and time None when the NMPC did not run)."""
         u = self.u
         self._soles = np.array(self.nmpc.f_sole(q))
         j = self.plan.index(t)
@@ -323,8 +327,7 @@ class RobonionController:
                 self._lift_step[i] = ph.step if ph.swing == i else nxt.step if nxt.swing == i else None
             elif self._walking and self._ctrl_modes[i] == "air" and modes[i] != "air":
                 k = self._lift_step[i]
-                # lifted and set down again within a (paused) double support: not the landing of step k, which
-                # moved every later foothold 0.1 m back (0.1 m/s, 2026-10-17)
+                # set down again within a (paused) double support: not the landing of step k
                 if k is not None and t >= next(p.t0 for p in self.plan.phases if p.step == k):
                     self.plan.replan(k, self._soles[:2, i])
                 self._lift_step[i] = None
@@ -335,8 +338,7 @@ class RobonionController:
 
         self._retime(t, modes)
         planned = self.plan.modes(t)
-        # not while held: a hold from touchdown reaches the next single support before PAUSE_AFTER, and peel-off
-        # then lifted the loaded edge foot (+y 1.0 N·s fell, docs/stage3.md)
+        # no peel-off while held: it lifted the loaded edge foot
         peel = self.state not in HELD
         now = tuple(
             "air" if peel and m in EDGE_MODES and planned[i] == "air" and modes[1 - i] == "flat" else m
@@ -353,37 +355,20 @@ class RobonionController:
             return self._catch(t, now), None, None
         return self._run_nmpc(t, q, qd, now)
 
-    def _restart(self, t):
-        """Walking, recovering from a hold: a new plan from the soles where they stand, standing first (paused while
-        recovering), then the steps left with the speed ramp from zero. The paused plan expected the CoM to move
-        towards the next stance foot; resumed from rest, the stance sole rolled inward, caught and held again on
-        every step (0.1 m/s, 2026-10-17)."""
-        plan = self.plan
-        k = next(
-            (
-                ph.step
-                for i, ph in enumerate(plan.phases)
-                if ph.step is not None and ph.t1 > t and i not in self._airborne
-            ),
-            None,
-        )
-        feet = self._soles[:2].T.copy()
-        self._mid = feet.mean(0)
-        if k is None:
+    def _retime(self, t, modes):
+        i = self.plan.index(t)
+        ph = self.plan.phases[i]
+        if ph.swing is None:
             return
-        # from rest the NMPC did not shift the weight onto a sole ahead of the other within the double support (the
-        # CoM went back, the sole rolled inward and held again, 0.1 m/s): the leading foot steps back level first
-        lead = int(np.argmax(feet[:, 0]))
-        first = lead if abs(feet[0, 0] - feet[1, 0]) > RESTART_STAGGER else plan.swings[k]
-        p = dataclasses.replace(self.params, n_steps=self.params.n_steps - k, first_swing=first, t_stand=RECOVER_TIME)
-        self.plan = GaitPlan(p, feet, GRAVITY / plan.omega**2, spacing=plan.spacing)
-        self.plan.stretch(len(self.plan.phases) - 1, self.params.t_stand - RECOVER_TIME)
-        self.plan.stretch(1, RESTART_DS - self.params.t_ds)
-        self.plan.shift(t)
-        self._airborne = set()
-        self._lift_step = [None, None]
-        self._lift_xy = feet.copy()
-        self._footholds.restart()
+
+        if modes[ph.swing] == "air":
+            self._airborne.add(i)
+            if ph.t1 <= t + self.dt and ph.t1 - ph.t0 < ph.t_nom + MAX_STRETCH:
+                self.plan.stretch(i, t + 1.5 * self.dt - ph.t1)
+                self._prepared = None
+        elif i in self._airborne and t < ph.t1:
+            self.plan.stretch(i, t - ph.t1)
+            self._prepared = None
 
     def _transition(self, t, q, qd, now):
         """Next state from the contact modes of this tick (see State)."""
@@ -396,8 +381,7 @@ class RobonionController:
             self._tilt_hist = []
 
         ph = self.plan.phase(t)
-        # walking: the stance sole read on its toe at the touchdown tick, and the catch pulled the swing foot back
-        # to its lift-off point 0.1 m behind (2026-10-17)
+        # walking, late in the swing: the foot is landing, no catch
         landing = self._walking and ph.swing is not None and (t - ph.t0) / ph.t_nom >= CATCH_UNTIL
         if edge and not (air and landing):
             if air:
@@ -424,8 +408,7 @@ class RobonionController:
             dcm = com[:2] + comd[:2] / self.plan.omega
             calm = np.linalg.norm(dcm - self._mid) < CALM_DCM and np.linalg.norm(comd[:2]) < CALM_SPEED
             self._calm = self._calm + self.dt if calm else 0.0
-            # walking: the foot opposite the lean read air by force within 40 ms, and the gait went on leaning on the
-            # other sole, which rolled inward and held again on every step (0.1 m/s, 2026-10-17)
+            # walking: stand until calm even with a foot in the air
             if (air and not self._walking) or self._calm >= CALM_TIME:
                 self.state, self._prepared = State.STEP, None
             else:
@@ -435,6 +418,57 @@ class RobonionController:
         """A sole on an edge whose tilt stayed within STILL_SPAN for STILL_TIME."""
         span = np.ptp(np.array([h for _, h in self._tilt_hist]), axis=0)
         return t - self._tilt_hist[0][0] >= STILL_TIME - 1.5 * self.dt and span.max() < STILL_SPAN
+
+    def _hold(self, t):
+        if self._hold_since is None:
+            self._hold_since = t
+        self._pause(t)
+
+    def _pause(self, t, force=False):
+        """Double support until t + RECOVER_TIME; later phases move back. A single-support phase whose foot has
+        not lifted yet is postponed by lengthening the double support before it."""
+        if not force and not PAUSE_AFTER <= t - self._hold_since <= MAX_PAUSE:
+            return
+
+        i = self.plan.index(t)
+        if self.plan.phases[i].swing is not None:
+            if i in self._airborne or i == 0:
+                return
+            i -= 1
+
+        d = t + RECOVER_TIME - self.plan.phases[i].t1
+        if d > 0:
+            self.plan.stretch(i, d)
+            self._prepared = None
+
+    def _restart(self, t):
+        """Walking, recovering from a hold: a new plan from the soles where they stand, standing first (paused while
+        recovering), then the steps left with the speed ramp from zero."""
+        plan = self.plan
+        k = next(
+            (
+                ph.step
+                for i, ph in enumerate(plan.phases)
+                if ph.step is not None and ph.t1 > t and i not in self._airborne
+            ),
+            None,
+        )
+        feet = self._soles[:2].T.copy()
+        self._mid = feet.mean(0)
+        if k is None:
+            return
+        # from rest, the leading foot steps back level first
+        lead = int(np.argmax(feet[:, 0]))
+        first = lead if abs(feet[0, 0] - feet[1, 0]) > RESTART_STAGGER else plan.swings[k]
+        p = dataclasses.replace(self.params, n_steps=self.params.n_steps - k, first_swing=first, t_stand=RECOVER_TIME)
+        self.plan = GaitPlan(p, feet, GRAVITY / plan.omega**2, spacing=plan.spacing)
+        self.plan.stretch(len(self.plan.phases) - 1, self.params.t_stand - RECOVER_TIME)
+        self.plan.stretch(1, RESTART_DS - self.params.t_ds)
+        self.plan.shift(t)
+        self._airborne = set()
+        self._lift_step = [None, None]
+        self._lift_xy = feet.copy()
+        self._footholds.restart()
 
     def _catch(self, t, now):
         """Stance-leg targets held, the swing leg back to its targets at lift-off at the servo rate limit, and the
@@ -467,16 +501,14 @@ class RobonionController:
 
         deferred, self._deferred = self._deferred, False
         if self._prepared != (now, True) and not deferred:
-            # a full solve (prepare + feedback) of the whole-body NMPC does not fit one tick with the estimation:
-            # prepare with the new plan now, feedback on the next tick (also the cold restart after a hold, ~8 ms)
+            # a full solve does not fit one tick: prepare with the new plan now, feedback on the next tick
             self.nmpc.prepare(q, qd, self._nodes(t + self.dt, now))
             self._prepared = (now, True)
             self._since_nmpc = NMPC_EVERY - 1
             self._deferred = True
             return self.u + self._v * self.dt, None, None
 
-        # after a deferral the feedback runs even if the modes changed again (contact flicker): deferring again
-        # left the targets open loop for up to 25 ticks offline, a full solve instead went over the tick
+        # after a deferral the feedback runs even if the modes changed again (contact flicker)
         u, self._v, status, solve_time = self.nmpc.feedback(q, qd, self.u, self.dt)
         self._since_nmpc = 0
         self._prepared = (now, False)
@@ -485,49 +517,11 @@ class RobonionController:
             self._prepared = (now, True)
         return u, status, solve_time
 
-    def _hold(self, t):
-        if self._hold_since is None:
-            self._hold_since = t
-        self._pause(t)
-
-    def _pause(self, t, force=False):
-        """Double support until t + RECOVER_TIME; later phases move back. A single-support phase whose foot has
-        not lifted yet is postponed by lengthening the double support before it."""
-        if not force and not PAUSE_AFTER <= t - self._hold_since <= MAX_PAUSE:
-            return
-
-        i = self.plan.index(t)
-        if self.plan.phases[i].swing is not None:
-            if i in self._airborne or i == 0:
-                return
-            i -= 1
-
-        d = t + RECOVER_TIME - self.plan.phases[i].t1
-        if d > 0:
-            self.plan.stretch(i, d)
-            self._prepared = None
-
-    def _retime(self, t, modes):
-        i = self.plan.index(t)
-        ph = self.plan.phases[i]
-        if ph.swing is None:
-            return
-
-        if modes[ph.swing] == "air":
-            self._airborne.add(i)
-            if ph.t1 <= t + self.dt and ph.t1 - ph.t0 < ph.t_nom + MAX_STRETCH:
-                self.plan.stretch(i, t + 1.5 * self.dt - ph.t1)
-                self._prepared = None
-        elif i in self._airborne and t < ph.t1:
-            self.plan.stretch(i, t - ph.t1)
-            self._prepared = None
-
     def _nodes(self, t, now):
         """NMPC plan: per node the modes, contact references, DCM / CoM velocity and swing-sole targets."""
         nodes, nr, plan = [], self.model.nr, self.plan
         cur = plan.index(t)
-        # the DCM reference stays the one of the plan at the start of the step: following the ALIP footholds, it
-        # pulled the CoM after the moved foothold and the foothold moved further (fell backwards in Isaac)
+        # the DCM reference stays the one of the plan at the start of the step, not the ALIP footholds'
         ref_plan = self._footholds.reference_plan(plan, plan.phases[cur].step)
         for tk in t + self.nmpc.t_nodes:
             r = ref_plan.reference(tk)

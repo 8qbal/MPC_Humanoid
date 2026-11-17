@@ -34,23 +34,22 @@ import numpy as np
 from .gait import GaitPlan, swing_xy
 from .model import GRAVITY, RigidContactModel
 
-# Step relative to the stance foot [m]: sagittal reach of the crouched leg within U_RANGE_DEG is ~85 mm per foot at
-# constant height (nmpc.py), lateral keeps the feet apart and within the hip roll range.
-MAX_STEP_X = 0.12
-MIN_WIDTH, MAX_WIDTH = 0.08, 0.18
-# Walking: the ALIP foothold of a step is set once, at swing progress ALIP_AT. The offset of du is learned at
-# ALIP_RATE per step, ALIP_GAIN and ALIP_MAX [m] apply to what is left. At 0.1 m/s in Isaac du at progress 0.5 stayed
-# within +-5 mm of its offset from step to step: lateral +-31-37 mm per swing foot; sagittal ALIP_V_GAIN x the plan's
-# CoM velocity, 1.5-1.6 s at 0.05 and 0.1 m/s through the speed ramps (a constant offset lagged over the ramp, and a
-# 33 mm longer step put the stance sole on its toe). Learned only while the plan moves faster than ALIP_V_MIN [m/s].
-ALIP_AT, ALIP_RATE, ALIP_GAIN, ALIP_MAX, ALIP_V_MIN = 0.5, 0.7, 0.5, 0.05, 0.01
-# The first two steps start from standing (lateral du -21 mm against -33 mm later): not learned
-ALIP_LEARN_FROM = 2
-# du offsets per swing progress, for a du away from ALIP_AT: the sagittal ratio fell from 1.2 s at 0.5 to 0.5 s at 0.7
-# and the lateral offset from +-30 to +-25 mm; step-to-step spread <= 5 mm (steady) and 13 mm (ramps) from 0.4 to 0.9,
-# 30-50 mm before 0.3 (0.05 and 0.1 m/s, docs/stage3.md). A du further than ALIP_OUTLIER [m] from its offset (a push)
-# is not learned.
-ALIP_BINS, ALIP_OUTLIER = (0.4, 0.5, 0.6, 0.7, 0.8, 0.9), 0.03
+# Why each value: docs/stage3.md, "NMPC and ALIP constants".
+
+# Step relative to the stance foot [m]
+MAX_STEP_X = 0.12  # the crouched leg reaches ~85 mm per foot within U_RANGE_DEG (nmpc.py)
+MIN_WIDTH = 0.08  # feet apart
+MAX_WIDTH = 0.18  # within the hip roll range
+
+# Foothold feedback while walking
+ALIP_AT = 0.5  # swing progress at which the foothold of a step is set, once
+ALIP_RATE = 0.7  # per step, learning rate of the du offsets
+ALIP_GAIN = 0.5  # on du minus its offset
+ALIP_MAX = 0.05  # m
+ALIP_V_MIN = 0.01  # m/s, the sagittal offset is learned only while the plan moves faster
+ALIP_LEARN_FROM = 2  # the first steps start from standing: not learned
+ALIP_BINS = (0.4, 0.5, 0.6, 0.7, 0.8, 0.9)  # swing progress of the learned du offsets
+ALIP_OUTLIER = 0.03  # m, a du further than this from its offset (a push) is not learned
 
 
 def _blend(old: float | None, new: float) -> float:
@@ -98,8 +97,8 @@ class FootholdAdapter:
         self._learn_offsets(t, q, qd, plan, soles)
 
     def _alip(self, t, q, qd, plan, soles, lift_xy):
-        """Foothold of the swinging foot: nominal plus the ALIP feedback (alip.py) about the learned orbit. The last
-        step too: without it the CoM ran 30% faster than the plan sideways into the stop and fell (0.1 m/s)."""
+        """Foothold of the swinging foot, the last step included: nominal plus the ALIP feedback about the learned
+        orbit."""
         ph = plan.phase(t)
         k = ph.step
         if k is None or (t - ph.t0) / ph.t_nom < ALIP_AT:
@@ -108,8 +107,7 @@ class FootholdAdapter:
             return
         self._ref = (k, copy.deepcopy(plan))
         if self.held:
-            # the plan was paused: its reference CoM velocity is not the robot's, du read -0.1 m for a step that
-            # then landed behind the stance foot (0.1 m/s, 2026-10-17)
+            # the plan was paused: its reference CoM velocity is not the robot's
             return
         du, v = self._alip_du(t, q, qd, plan, ph, soles)
         i = ph.swing

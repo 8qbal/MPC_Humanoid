@@ -35,7 +35,7 @@ class AhrsGyro:
     """Pelvis roll/pitch (model convention R = Rz(yaw) Ry(pitch) Rx(roll), yaw removed), their rates and the yaw rate
     from the AHRS quaternion, the gyro and the encoders. The IMU sits on upper_body_link, behind torso_pitch.
 
-    compiled: the same computation as one generated C function (Pinocchio took ~0.2 ms per tick). Its inputs are in
+    The computation is one generated C function (Pinocchio took ~0.2 ms per tick). Its inputs are in
     sorted joint-name order, so the build does not depend on the order the caller delivers the joints in."""
 
     def __init__(self, act_names: list[str], build: bool = False):
@@ -264,7 +264,7 @@ class ContactProjectionEstimator:
     matters only for rotations the active contacts leave free (e.g. pitch while the soles roll on their
     toes).
 
-    compiled: the whole update as one generated C function; the KKT systems then keep all contact rows
+    The whole update is one generated C function; the KKT systems keep all contact rows
     and an inactive row reads lambda_i = 0, which gives the same solution as dropping it.
     """
 

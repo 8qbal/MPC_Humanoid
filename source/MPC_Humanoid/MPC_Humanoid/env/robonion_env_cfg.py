@@ -5,8 +5,8 @@
 
 """
 Manager-based env for the Robonion MPC controller.
-The controller reads observations from and writes actions into this env's managers directly
-plain ``ManagerBasedEnvCfg``
+The controller reads observations from and writes actions into this env's managers directly: a plain
+``ManagerBasedEnvCfg``.
 """
 
 from __future__ import annotations
@@ -47,8 +47,6 @@ _ACTUATED_JOINTS = [
 ]
 _IMU_PATH = "{ENV_REGEX_NS}/Robot/.*/upper_body_link/imu_link"
 
-# Scene definition.
-
 
 @configclass
 class MpcHumanoidRobonionSceneCfg(InteractiveSceneCfg):
@@ -84,8 +82,6 @@ class ActionsCfg:
 class ObservationsCfg:
     @configclass
     class StateCfg(ObsGroup):
-        """State that can be observed and measured."""
-
         # std at 200 Hz from the Xsens MTi-630 leaflet (Feb 2025): gyro 0.007 deg/s/sqrt(Hz),
         # accel 60 ug/sqrt(Hz).
         imu_ang_vel = ObsTerm(
@@ -127,7 +123,6 @@ class MpcHumanoidRobonionEnvCfg(ManagerBasedEnvCfg):
     actions: ActionsCfg = ActionsCfg()
     events: EventsCfg = EventsCfg()
 
-    # TODO: do more research on the freq (match motor freq with mpc and ahrs
     def __post_init__(self) -> None:
         self.seed = 0
         self.decimation = 5

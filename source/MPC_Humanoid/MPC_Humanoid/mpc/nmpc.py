@@ -57,35 +57,40 @@ from .model import (
 N_BASE_JOINTS = len(MODEL_JOINTS)
 TORSO = MODEL_JOINTS.index("torso_pitch_joint")
 N_CONTACT_ROWS = 16
-# 16 nodes of 31.25 ms over the 0.5 s horizon behave like 25 nodes of 20 ms while stepping and cost ~40 % less per
-# tick; non-uniform grids (20 ms nodes first, longer ones after) raised the torso torque above the servo limit.
-N_NODES = 16
+
+# Why each value: docs/stage3.md, "NMPC and ALIP constants".
+
+# Horizon
+N_NODES = 16  # like 25 nodes of 20 ms while stepping at ~40 % less per tick; non-uniform grids broke the tuning
 HORIZON = 0.5  # s
 OMEGA = math.sqrt(GRAVITY / 0.48)  # LIPM natural frequency at the standing CoM height
+
+# Contact
 F_MIN = 5.0  # N, minimum normal force of a sole in contact
 MU = 0.5  # friction coefficient for the controller; the env gives ~0.75 (ground 1.0, feet PhysX default 0.5)
 COP_MARGIN = 0.01  # m inside the sole edges
 EFFORT_FRACTION = 0.8
-# Servo-target excursion from the standing pose [deg]: hip roll, front thigh, ankle pitch, ankle roll
-# (left, right), torso pitch. Without bounds the NMPC swung the torso by over 100 deg after pushes.
+
+# Servo-target excursion from the standing pose [deg]; without bounds the torso swung over 100 deg after pushes
+# hip roll, front thigh, ankle pitch, ankle roll (left, right), torso pitch
 U_RANGE_DEG = np.array([15, 20, 20, 15, 15, 20, 20, 15, 15], dtype=float)
 HIP_YAW_RANGE_DEG = 15.0
 ARM_RANGE_DEG = np.array([30, 20, 30, 30] * 2, dtype=float)  # shoulder pitch, roll, elbow yaw, pitch (left, right)
 
-# Cost weights. W_U = 0.1 lets the CoM move to the sole centre: better against backward pushes
-# (the weakest direction) than W_U = 10, which holds the pose and is better against forward pushes.
-# At W_DCM = 100 the servo-rate cost kept the planned DCM 19 mm (RMS) behind the walking reference at 0.1 m/s;
-# 1000 halves it and the walking holds, at the cost of longer holds after in-place backward pushes.
-W_DCM, W_COMD, W_TORSO, W_U, W_RATE = 1000.0, 5.0, 10.0, 0.1, 0.5
-W_SQUEEZE, W_TILT, W_TERM = 1e-4, 1e3, 1e3
-# The leg-length and pelvis terms keep the NMPC from folding a knee or rolling the pelvis: at the
-# straight-leg pose a knee bend is nearly invisible to the linearised contact model.
-W_LEG, W_PELVIS = 1e4, 100.0
-# At 1e4 the swing foot reached 30 % of its planned height (the servo-rate cost dominated), at 1e6 94 %.
-W_SWING = 1e6
-# Arm targets pull to the default pose with W_ARM. Summed ground yaw moment: the centroidal yaw momentum changes only
-# through it, so this damps yaw without the feet cancelling an external torque (a cost on the momentum itself did).
-W_ARM, W_MZ = 1.0, 10.0
+# Cost weights
+W_DCM = 1000.0  # 100 kept the planned DCM 19 mm RMS behind the walking reference at 0.1 m/s
+W_COMD = 5.0
+W_TORSO = 10.0
+W_U = 0.1  # lets the CoM move to the sole centre: better against backward pushes than 10
+W_RATE = 0.5
+W_SQUEEZE = 1e-4
+W_TILT = 1e3
+W_TERM = 1e3
+W_LEG = 1e4  # no folded knee: near straight legs a knee bend is nearly invisible to the linearised contacts
+W_PELVIS = 100.0  # no rolled pelvis
+W_SWING = 1e6  # 1e4 lifted the swing foot to 30 % of its planned height, 1e6 to 94 %
+W_ARM = 1.0  # arm targets to the default pose
+W_MZ = 10.0  # summed ground yaw moment: damps yaw without the feet cancelling an external torque
 
 
 def _ocp_key(functions: list[ca.Function], arrays: list, options: dict) -> str:
@@ -219,9 +224,7 @@ class RobonionNMPC:
 
         # lambda = L (g0 - J M^-1 b - 2 alpha J qd - alpha^2 J q) with L = A^-1 diag(flags), g0 the contact terms
         # that do not depend on (b, q, qd) at this node
-        # the matrix algebra in SX on plain matrix inputs (J with the sparsity of the contact Jacobian), called on the
-        # contact algebra through MX: in SX on q directly it generated ~30 MB of C, in MX (QR solve, generic
-        # products) it ran slower than numpy
+        # SX on matrix inputs, called through MX: SX on q gave ~30 MB of C, MX alone was slower than numpy
         raw = M.raw_sx
         Jm = ca.SX.sym("J", raw["Jc"].sparsity_out(0))
         cm, gm = ca.SX.sym("c", 2 * nr), ca.SX.sym("g", 2 * nr)
@@ -274,22 +277,18 @@ class RobonionNMPC:
 
         options = {
             "qp_solver": "PARTIAL_CONDENSING_HPIPM",
-            # partial condensing to 5 stages, HPIPM speed mode and a warm start: QP 2.9 -> 2.1 ms per tick
-            # (stage 2); SPEED_ABS saved another ~0.5 ms per feedback with the whole body
+            # partial condensing, HPIPM speed mode and a warm start: QP 2.9 -> 2.1 ms per tick, SPEED_ABS -0.5 ms
             "qp_solver_cond_N": 5,
             "hpipm_mode": "SPEED_ABS",
             "qp_solver_warm_start": 1,
             "qp_solver_iter_max": 100,
-            # 1e-5 instead of the defaults: 4.7 instead of 6.1 HPIPM iterations per feedback; 1e-4 (3.9) started holds
-            # after -x 1.0 pushes in Isaac (dual warm start, qp_solver_warm_start 2, took more iterations)
+            # 4.7 instead of 6.1 HPIPM iterations per feedback; 1e-4 started holds after -x 1.0 pushes
             "qp_solver_tol_stat": 1e-5,
             "qp_solver_tol_eq": 1e-5,
             "qp_solver_tol_ineq": 1e-5,
             "qp_solver_tol_comp": 1e-5,
             "hessian_approx": "GAUSS_NEWTON",
-            # Radau IIA, one step per node: 2 stages matched RK4 at 1 ms within 0.005 mm of CoM over the horizon
-            # (stage 2). 1 stage everywhere fit the whole-body tick but rolled the soles onto edges in Isaac; 2 on the
-            # first 4 intervals still did with the deferred switch, on the first 8 it steps as cleanly as stage 2
+            # Radau IIA, one step per node; 1 stage everywhere rolled the soles onto edges in Isaac
             "integrator_type": "IRK",
             "collocation_type": "GAUSS_RADAU_IIA",
             "sim_method_num_stages": np.r_[[2] * 8, [1] * 8],
@@ -313,7 +312,6 @@ class RobonionNMPC:
         ocp.code_export_directory = os.path.join(BUILD_DIR, name)
         json_file = os.path.join(ocp.code_export_directory, f"{name}.json")
         lib_file = os.path.join(ocp.code_export_directory, f"libacados_ocp_solver_{name}.so")
-        # the contact algebra in the CasADi VM took ~2 ms per tick; compiled it is a small fraction of that
         so_file = os.path.join(ocp.code_export_directory, "alg.so")
 
         if build:
@@ -332,6 +330,7 @@ class RobonionNMPC:
             )
 
         self.ocp = ocp
+        # the contact algebra in the CasADi VM took ~2 ms per tick; compiled it is a small fraction of that
         self.f_alg = ca.external("alg_all", so_file)
         # evaluated in place on numpy arrays: converting the ~32k outputs from a DM took ~1.3 ms
         self._alg_buf, self._alg_eval = self.f_alg.buffer()

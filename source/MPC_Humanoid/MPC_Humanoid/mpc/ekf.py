@@ -61,7 +61,7 @@ class LegKinematicsEkf:
     estimate_bias: off by default; the paper switches it at runtime because typical gaits lie close to the cases
     where the biases are unobservable, and the Isaac IMU has no bias.
 
-    compiled: the leg kinematics, their Jacobian and the base-velocity term as one generated C function (Pinocchio
+    The leg kinematics, their Jacobian and the base-velocity term are one generated C function (Pinocchio
     with finite differences took ~0.5 ms per tick); inputs in sorted joint-name order, as in AhrsGyro.
     build: see model.compile_functions.
     """

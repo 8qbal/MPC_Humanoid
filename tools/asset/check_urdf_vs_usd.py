@@ -35,7 +35,6 @@ parser.add_argument("--meshes", default="references/robinion_description/meshes/
 args = parser.parse_args()
 
 
-# URDF parsing.
 def v3(s):
     return np.array([float(x) for x in s.split()])
 
@@ -103,7 +102,6 @@ for j in root.findall("joint"):
 child_of = {j["child"]: j for j in joints.values()}
 
 
-# STL parsing.
 def read_stl(p):
     d = open(p, "rb").read()
     if d[:5] == b"solid" and b"facet" in d[:400]:
@@ -124,7 +122,6 @@ def area_centroid(T):
     return a.sum(), (a[:, None] * T.mean(1)).sum(0) / a.sum()
 
 
-# USD helpers.
 stage = Usd.Stage.Open(args.usd)
 print(
     f"USD: {args.usd}  metersPerUnit={UsdGeom.GetStageMetersPerUnit(stage)} "
@@ -171,7 +168,6 @@ def find_link(name):
     return None
 
 
-# Link validation.
 print("\n================ LINKS ================")
 usd_mass = 0.0
 for name, L in links.items():
@@ -333,7 +329,6 @@ print(
     f"usd={usd_mass:.6f}"
 )
 
-# Joint validation.
 print("\n================ JOINTS ================")
 AX = {"X": np.array([1.0, 0, 0]), "Y": np.array([0, 1.0, 0]), "Z": np.array([0, 0, 1.0])}
 usd_joints = {p.GetName(): p for p in stage.Traverse() if p.IsA(UsdPhysics.Joint)}
@@ -413,7 +408,6 @@ for name, J in joints.items():
         if damp is not None and J["damping"] is not None and abs(damp - J["damping"]) > 1e-4:
             issue("WARN", f"{name}: damping {damp:.4g} != urdf {J['damping']}")
 
-# Loop-closure validation.
 print("\n================ EXTRA USD JOINTS (loop closures) ================")
 for n, p in usd_joints.items():
     if n in joints:
